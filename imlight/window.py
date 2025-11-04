@@ -1,0 +1,222 @@
+import numpy as np
+from OpenGL import GL
+from slimgui import imgui
+from abc import ABC, abstractmethod
+
+def create_texture_from_numpy(pixels: np.ndarray) -> int:
+    """Creates an OpenGL texture from a NumPy array."""
+    height, width, channels = pixels.shape
+    
+    texture_id = GL.glGenTextures(1)
+    GL.glBindTexture(GL.GL_TEXTURE_2D, texture_id)
+    
+    GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR)
+    GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
+    GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_S, GL.GL_CLAMP_TO_EDGE)
+    GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_CLAMP_TO_EDGE)
+    
+    if channels == 3:
+        fmt = GL.GL_RGB
+    elif channels == 4:
+        fmt = GL.GL_RGBA
+    else:
+        raise ValueError("Image must be RGB or RGBA")
+
+    GL.glTexImage2D(
+        GL.GL_TEXTURE_2D, 0, fmt, width, height, 0,
+        fmt, GL.GL_UNSIGNED_BYTE, pixels
+    )
+    
+    GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
+    return texture_id
+
+def update_texture_from_numpy(texture_id: int, pixels: np.ndarray) -> None:
+    """Updates an existing OpenGL texture with data from a NumPy array."""
+    height, width, channels = pixels.shape
+    
+    if channels == 3:
+        fmt = GL.GL_RGB
+    elif channels == 4:
+        fmt = GL.GL_RGBA
+    else:
+        raise ValueError("Image must be RGB or RGBA")
+
+    GL.glBindTexture(GL.GL_TEXTURE_2D, texture_id)
+    GL.glTexSubImage2D(
+        GL.GL_TEXTURE_2D, 0, 0, 0, width, height,
+        fmt, GL.GL_UNSIGNED_BYTE, pixels
+    )
+    GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
+
+class Window(ABC):
+    """
+    The updated base class with pre/post draw hooks and a close hook.
+    """
+    def __init__(self, title: str):
+        self.title = title
+        self.is_open: bool = True
+
+    def draw(self):
+        """
+        The template method for drawing a window. Subclasses should not override this.
+        It orchestrates the pre_draw, begin, draw_content, end, and post_draw calls.
+        """
+        self.pre_draw()
+        
+        was_open = self.is_open
+        opened, self.is_open = imgui.begin(self.title, closable=True)
+        
+        if was_open and not self.is_open:
+            self.on_close()
+
+        if opened:
+            self.draw_content()
+
+        imgui.end()
+        self.post_draw()
+        
+    def pre_draw(self):
+        """Optional hook for subclasses, called before imgui.begin()."""
+        pass
+
+    def post_draw(self):
+        """Optional hook for subclasses, called after imgui.end()."""
+        pass
+
+    @abstractmethod
+    def draw_content(self):
+        """Subclasses MUST implement this to draw their unique content."""
+        pass
+
+    def on_close(self):
+        """Optional hook called when the window is closed by the user."""
+        pass
+    
+class ImguiAboutWindow(Window):
+    def __init__(self):
+        super().__init__("About imgui")
+        self.is_open = False
+
+    def draw(self):
+        if self.is_open:
+            self.is_open = imgui.show_about_window(closable=True)
+
+    def draw_content(self):
+        pass
+    
+class CanvasWindow(Window, ABC):
+    """
+    An abstract base class for an ImGui window that displays a pixel buffer.
+
+    This class handles the creation, updating, and rendering of an OpenGL
+    texture. Subclasses must implement `update_pixels` and can optionally
+    override `draw_controls` and `handle_interaction`.
+    """
+    def __init__(self, title: str, width: int, height: int):
+        super().__init__(title)
+        self.width = width
+        self.height = height
+
+        self.pixels = np.zeros((self.height, self.width, 4), dtype=np.uint8)
+        
+        self.texture_id = create_texture_from_numpy(self.pixels)
+
+    def draw(self):
+        """The main rendering method."""
+        imgui.begin(self.title)
+
+        self.draw_controls()
+        self.update_pixels(self.pixels)
+        
+        assert self.texture_id is not None
+        update_texture_from_numpy(self.texture_id, self.pixels)
+        imgui.image(self.texture_id, (self.width, self.height))
+
+        self.handle_interaction()
+        imgui.end()
+
+    @abstractmethod
+    def update_pixels(self, pixels: np.ndarray):
+        """
+        Subclasses MUST implement this method.
+        Modify the 'pixels' numpy array in place to update the canvas content.
+        """
+        pass
+
+    def draw_controls(self):
+        """
+        Subclasses can optionally override this to add ImGui widgets
+        before the canvas is drawn.
+        """
+        pass
+
+    def handle_interaction(self):
+        """
+        Subclasses can optionally override this to handle interaction
+        (e.g., mouse drawing) *after* the canvas is drawn.
+        imgui.is_item_hovered() can be used here.
+        """
+        pass
+
+    def __del__(self):
+        """Ensures the OpenGL texture is deleted when the object is destroyed."""
+        if self.texture_id is not None:
+            GL.glDeleteTextures([self.texture_id])
+            self.texture_id = None
+            
+class CanvasFullWindow(Window, ABC):
+    """
+    An abstract base class for an ImGui window that tightly encapsulates a
+    pixel buffer, with no padding or borders around the image.
+
+    The window's content area will be sized exactly to the texture.
+    """
+    def __init__(self, title: str, width: int, height: int, closable: bool = True):
+        super().__init__(title)
+        self.width = width
+        self.height = height
+        self.closable = closable
+        self.is_open = True
+
+        self.pixels = np.zeros((self.height, self.width, 4), dtype=np.uint8)
+        self.texture_id = create_texture_from_numpy(self.pixels)
+
+    def draw(self):
+        """The main rendering method that ensures a tight fit."""
+        if not self.is_open:
+            return
+
+        imgui.push_style_var(imgui.StyleVar.WINDOW_PADDING, (0, 0))
+        imgui.push_style_var(imgui.StyleVar.WINDOW_BORDER_SIZE, 0)
+        imgui.set_next_window_content_size((self.width, self.height))
+
+        flags = imgui.WindowFlags.NO_SCROLLBAR | imgui.WindowFlags.NO_SCROLL_WITH_MOUSE
+        
+        opened, self.is_open = imgui.begin(
+            self.title, closable=self.closable, flags=flags
+        )
+
+        if opened:
+            self.update_pixels(self.pixels)
+            assert self.texture_id is not None
+            update_texture_from_numpy(self.texture_id, self.pixels)
+            imgui.image(self.texture_id, (self.width, self.height))
+            self.handle_interaction()
+
+        imgui.end()
+        imgui.pop_style_var(2)
+
+    @abstractmethod
+    def update_pixels(self, pixels: np.ndarray):
+        """Subclasses MUST implement this to define the canvas content."""
+        pass
+
+    def handle_interaction(self):
+        """Optional hook for subclasses to handle mouse interaction."""
+        pass
+
+    def __del__(self):
+        """Ensures the OpenGL texture is deleted."""
+        if self.texture_id is not None:
+            GL.glDeleteTextures([self.texture_id])
+            self.texture_id = None

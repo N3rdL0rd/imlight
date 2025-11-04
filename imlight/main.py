@@ -27,7 +27,6 @@ def main():
     
     app = App(glfw_window, renderer)
 
-    count = 0
     while not (glfw.window_should_close(glfw_window)):
         glfw.poll_events()
 
