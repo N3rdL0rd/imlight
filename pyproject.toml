@@ -1,0 +1,19 @@
+[project]
+name = "imlight"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "glfw>=2.10.0",
+    "numpy>=2.3.4",
+    "pyopengl>=3.1.10",
+    "requests>=2.32.5",
+    "slimgui>=0.5.2",
+]
+
+[tool.uv]
+package = true
+
+[project.scripts]
+imlight = "imlight.main:main"
