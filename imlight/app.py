@@ -143,14 +143,12 @@ class PatchWindow(Window):
 
                     is_selected = fixture in self.app.selected_fixtures
                     
-                    # Make the first cell a selectable that spans the whole row
                     changed, _ = imgui.selectable(
                         f"{fixture.start_address}##{fixture.start_address}",
                         is_selected,
                         flags=imgui.SelectableFlags.SPAN_ALL_COLUMNS
                     )
 
-                    # Handle selection logic
                     if changed:
                         io = imgui.get_io()
                         if io.key_ctrl: # Ctrl-click to toggle
@@ -160,7 +158,8 @@ class PatchWindow(Window):
                                 self.app.selected_fixtures.append(fixture)
                         else: # Simple click to select only one
                             self.app.selected_fixtures.clear()
-                            self.app.selected_fixtures.append(fixture)
+                            if not is_selected:
+                                self.app.selected_fixtures.append(fixture)
 
                     imgui.table_next_column()
                     imgui.text(fixture.profile.model)
@@ -235,13 +234,12 @@ class GridviewWindow(Window):
         """Draws the grid of all fixtures across all universes."""
         io = imgui.get_io()
         
-        if io.key_ctrl and imgui.is_mouse_clicked(imgui.MouseButton.LEFT) and imgui.is_window_focused():
-            print("DRAGGING!")
+        if imgui.is_window_hovered() and io.key_ctrl and imgui.is_mouse_clicked(0):
             self.is_drag_selecting = True
             self.drag_start_pos = io.mouse_pos
             self.fixtures_in_drag_rect.clear()
 
-        if self.is_drag_selecting and imgui.is_mouse_released(imgui.MouseButton.LEFT):
+        if self.is_drag_selecting and imgui.is_mouse_released(0):
             current_selection_set = set(self.app.selected_fixtures)
             final_selection_set = current_selection_set.union(self.fixtures_in_drag_rect)
             self.app.selected_fixtures = list(final_selection_set)
@@ -254,15 +252,19 @@ class GridviewWindow(Window):
 
         tile_size = 60
         tile_spacing = 4
-        
         available_width = imgui.get_content_region_avail()[0]
-
         num_columns = max(1, int(available_width / (tile_size + tile_spacing)))
+
+        window_draw_list = imgui.get_window_draw_list()
+        window_draw_list.channels_split(2)
+
         imgui.columns(num_columns, "fixture_grid", border=False)
 
         for universe in self.app.universes:
             for fixture in universe.fixtures:
-                self._draw_fixture_tile(fixture, tile_size)
+                window_draw_list.channels_set_current(0)
+                
+                self._draw_fixture_tile_content(fixture, tile_size)
                 
                 if self.is_drag_selecting:
                     min_rect = imgui.get_item_rect_min()
@@ -277,42 +279,39 @@ class GridviewWindow(Window):
                         max_rect[1] >= drag_rect_min_y and min_rect[1] <= drag_rect_max_y):
                         self.fixtures_in_drag_rect.add(fixture)
                 
+                window_draw_list.channels_set_current(1)
+                self._draw_fixture_tile_overlay(fixture)
+                
                 imgui.next_column()
 
         imgui.columns(1)
         
         if self.is_drag_selecting:
-            foreground_draw_list = imgui.get_foreground_draw_list()
+            window_draw_list.channels_set_current(1)
+            
             rect_color = imgui.get_color_u32((0.2, 0.4, 1.0, 0.25))
             border_color = imgui.get_color_u32((0.4, 0.6, 1.0, 0.8))
-            foreground_draw_list.add_rect_filled(self.drag_start_pos, io.mouse_pos, rect_color)
-            foreground_draw_list.add_rect(self.drag_start_pos, io.mouse_pos, border_color, thickness=1.0)
+            window_draw_list.add_rect_filled(self.drag_start_pos, io.mouse_pos, rect_color)
+            window_draw_list.add_rect(self.drag_start_pos, io.mouse_pos, border_color, thickness=1.0)
+
+        window_draw_list.channels_merge()
 
 
     def _get_fixture_color(self, fixture: ActiveFixture) -> Tuple[float, float, float, float]:
-        """
-        Intelligently determines the RGBA color for a fixture's tile.
-        """
         r, g, b = 0.0, 0.0, 0.0
         has_color = False
-        
         if "red" in fixture.profile.channel_map: r = fixture.red / 255.0; has_color = True # type: ignore
         if "green" in fixture.profile.channel_map: g = fixture.green / 255.0; has_color = True # type: ignore
         if "blue" in fixture.profile.channel_map: b = fixture.blue / 255.0; has_color = True # type: ignore
-            
         intensity = 1.0
         if "intensity" in fixture.profile.channel_map:
             intensity = fixture.intensity / 255.0 # type: ignore
-        
         if has_color:
             return (r * intensity, g * intensity, b * intensity, 1.0)
         else:
             return (intensity, intensity, intensity, 1.0)
 
-    def _draw_fixture_tile(self, fixture: ActiveFixture, size: float):
-        """
-        Draws a compact, single tile representing one fixture.
-        """
+    def _draw_fixture_tile_content(self, fixture: ActiveFixture, size: float):
         imgui.push_style_var(imgui.StyleVar.WINDOW_PADDING, (0, 0))
         imgui.begin_child(f"fixture_{fixture.start_address}", size=(size, size))
         
@@ -345,13 +344,14 @@ class GridviewWindow(Window):
         
         imgui.end_child()
         imgui.pop_style_var()
-        
+
+    def _draw_fixture_tile_overlay(self, fixture: ActiveFixture):
         is_selected = fixture in self.app.selected_fixtures or fixture in self.fixtures_in_drag_rect
         
         if is_selected:
             min_rect = imgui.get_item_rect_min()
             max_rect = imgui.get_item_rect_max()
-            draw_list = imgui.get_foreground_draw_list()
+            draw_list = imgui.get_window_draw_list()
             draw_list.add_rect(min_rect, max_rect, imgui.get_color_u32((1, 1, 0, 1)), thickness=2)
 
         if imgui.is_item_hovered():
