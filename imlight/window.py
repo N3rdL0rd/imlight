@@ -1,7 +1,9 @@
+from typing import Tuple
 import numpy as np
 from OpenGL import GL
 from slimgui import imgui
 from abc import ABC, abstractmethod
+from PIL import Image
 
 def create_texture_from_numpy(pixels: np.ndarray) -> int:
     """Creates an OpenGL texture from a NumPy array."""
@@ -226,6 +228,83 @@ class CanvasFullWindow(Window, ABC):
 
     def __del__(self):
         """Ensures the OpenGL texture is deleted."""
+        if self.texture_id is not None:
+            GL.glDeleteTextures([self.texture_id])
+            self.texture_id = None
+            
+class AspectLockedWindow(Window, ABC):
+    """A window that maintains a constant aspect ratio when resized."""
+    def __init__(self, title: str, aspect_ratio: float):
+        super().__init__(title)
+        if aspect_ratio <= 0:
+            raise ValueError("Aspect ratio must be positive.")
+        self.aspect_ratio = aspect_ratio
+
+    def get_aspect_ratio_func(self):
+        aspect_ratio = self.aspect_ratio
+        def cb(_pos: Tuple[float, float], _current_size: Tuple[float, float], desired_size: Tuple[float, float], _int_user_data: int) -> Tuple[float, float]:
+            nonlocal aspect_ratio
+            new_desired_y = int(desired_size[0] / aspect_ratio)
+            return (desired_size[0], new_desired_y)
+        return cb
+
+    def pre_draw(self):
+        """Set the resize constraints before the window is drawn."""
+        super().pre_draw()
+        imgui.set_next_window_size_constraints(
+            size_min=(100, 100 / self.aspect_ratio),
+            size_max=(5000, 2000 / self.aspect_ratio),
+            cb=self.get_aspect_ratio_func()
+        )
+
+class TexturedWindow(AspectLockedWindow, ABC):
+    """An aspect-locked window with an image drawn over its entire background."""
+    def __init__(self, title: str, aspect_ratio: float, image_path: str):
+        super().__init__(title, aspect_ratio)
+        self.texture_id = None
+        try:
+            with Image.open(image_path) as img:
+                img = img.convert("RGBA")
+                pixels = np.array(img, dtype=np.uint8)
+                self.texture_id = create_texture_from_numpy(pixels)
+        except FileNotFoundError:
+            print(f"Error: Background image not found at '{image_path}'")
+        except Exception as e:
+            print(f"Error loading image: {e}")
+
+    def draw(self):
+        """Custom draw method to render the background image."""
+        if not self.is_open:
+            return
+
+        self.pre_draw()
+
+        io = imgui.get_io()
+        flags = imgui.WindowFlags.NO_SCROLLBAR # No scrollbar for this type of window
+        if io.key_ctrl:
+            flags |= imgui.WindowFlags.NO_MOVE
+        flags |= imgui.WindowFlags.NO_BACKGROUND
+
+        was_open = self.is_open
+        opened, self.is_open = imgui.begin(self.title, closable=True, flags=flags)
+        
+        if was_open and not self.is_open:
+            self.on_close()
+
+        if opened:
+            if self.texture_id is not None:
+                draw_list = imgui.get_background_draw_list()
+                pos = imgui.get_window_pos()
+                size = imgui.get_window_size()
+                draw_list.add_image(self.texture_id, pos, (pos[0] + size[0], pos[1] + size[1]))
+            
+            self.draw_content()
+
+        imgui.end()
+        self.post_draw()
+        
+    def __del__(self):
+        """Clean up the OpenGL texture."""
         if self.texture_id is not None:
             GL.glDeleteTextures([self.texture_id])
             self.texture_id = None

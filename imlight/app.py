@@ -4,7 +4,7 @@ from slimgui import imgui
 
 from .fixture import ActiveFixture, DMXUniverse, DRIVERS
 from .fixture.all import ALL_FIXTURES
-from .window import Window, ImguiAboutWindow
+from .window import TexturedWindow, Window, ImguiAboutWindow
 
 class UniversesWindow(Window):
     def __init__(self, app: "App"):
@@ -14,8 +14,8 @@ class UniversesWindow(Window):
         self.drivers.append("None")
     
     def pre_draw(self):
-        imgui.set_next_window_size((600, 300), imgui.Cond.FIRST_USE_EVER)
-        imgui.set_next_window_pos((740, 40), imgui.Cond.FIRST_USE_EVER)
+        imgui.set_next_window_size((560, 130), imgui.Cond.FIRST_USE_EVER)
+        imgui.set_next_window_pos((10, 30), imgui.Cond.FIRST_USE_EVER)
 
     def draw_content(self):
         if imgui.button("Add New Universe"):
@@ -86,8 +86,8 @@ class PatchWindow(Window):
         self.status_is_error: bool = False
 
     def pre_draw(self):
-        imgui.set_next_window_size((700, 400), imgui.Cond.FIRST_USE_EVER)
-        imgui.set_next_window_pos((20, 40), imgui.Cond.FIRST_USE_EVER)
+        imgui.set_next_window_size((560, 990), imgui.Cond.FIRST_USE_EVER)
+        imgui.set_next_window_pos((10, 170), imgui.Cond.FIRST_USE_EVER)
         
     def draw_content(self):
         imgui.text("Add New Fixture(s)")
@@ -227,19 +227,19 @@ class GridviewWindow(Window):
         self.fixtures_in_drag_rect = set()
 
     def pre_draw(self):
-        imgui.set_next_window_size((800, 600), imgui.Cond.FIRST_USE_EVER)
-        imgui.set_next_window_pos((20, 480), imgui.Cond.FIRST_USE_EVER)
+        imgui.set_next_window_pos((580, 30), imgui.Cond.FIRST_USE_EVER)
+        imgui.set_next_window_size((780, 480), imgui.Cond.FIRST_USE_EVER)
 
     def draw_content(self):
         """Draws the grid of all fixtures across all universes."""
         io = imgui.get_io()
         
-        if imgui.is_window_hovered() and io.key_ctrl and imgui.is_mouse_clicked(0):
+        if imgui.is_window_hovered() and io.key_ctrl and imgui.is_mouse_clicked(imgui.MouseButton.LEFT):
             self.is_drag_selecting = True
             self.drag_start_pos = io.mouse_pos
             self.fixtures_in_drag_rect.clear()
 
-        if self.is_drag_selecting and imgui.is_mouse_released(0):
+        if self.is_drag_selecting and imgui.is_mouse_released(imgui.MouseButton.LEFT):
             current_selection_set = set(self.app.selected_fixtures)
             final_selection_set = current_selection_set.union(self.fixtures_in_drag_rect)
             self.app.selected_fixtures = list(final_selection_set)
@@ -361,6 +361,28 @@ class GridviewWindow(Window):
             intensity_percent = (fixture.intensity / 255.0) if "intensity" in fixture.profile.channel_map else 1.0 # type: ignore
             imgui.text(f"Intensity: {intensity_percent:.0%}")
             imgui.end_tooltip()
+            
+
+class StageviewWindow(TexturedWindow):
+    """
+    This window demonstrates the aspect lock and background texture.
+    It has a 16:9 aspect ratio and loads 'my_background.png'.
+    """
+    def __init__(self, app: "App"):
+        super().__init__(title="Stageview", 
+                         aspect_ratio=2500 / 2658, 
+                         image_path="stage.png")
+        self.app = app
+        self.is_open = True
+
+    def pre_draw(self):
+        super().pre_draw()
+        imgui.set_next_window_pos((1370, 30), imgui.Cond.FIRST_USE_EVER)
+        imgui.set_next_window_size((598, 635), imgui.Cond.FIRST_USE_EVER)
+
+    def draw_content(self):
+        pass
+
 
 class App:
     def __init__(self, window: Any, renderer: GlfwRenderer):
@@ -369,7 +391,8 @@ class App:
         self.universes_window = UniversesWindow(self)
         self.patch_window = PatchWindow(self)
         self.gridview_window = GridviewWindow(self)
-        self.windows: List[Window] = [self.universes_window, self.patch_window, self.gridview_window, ImguiAboutWindow()]
+        self.stageview_window = StageviewWindow(self)
+        self.windows: List[Window] = [self.universes_window, self.patch_window, self.gridview_window, self.stageview_window, ImguiAboutWindow()]
         self.universes: List[DMXUniverse] = []
         
         self.selected_fixtures: List[ActiveFixture] = []
