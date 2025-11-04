@@ -63,8 +63,13 @@ class Window(ABC):
         """
         self.pre_draw()
         
+        io = imgui.get_io()
+        flags = imgui.WindowFlags.NONE
+        if io.key_ctrl:
+            flags |= imgui.WindowFlags.NO_MOVE
+
         was_open = self.is_open
-        opened, self.is_open = imgui.begin(self.title, closable=True)
+        opened, self.is_open = imgui.begin(self.title, closable=True, flags=flags)
         
         if was_open and not self.is_open:
             self.on_close()
@@ -99,6 +104,10 @@ class ImguiAboutWindow(Window):
 
     def draw(self):
         if self.is_open:
+            io = imgui.get_io()
+            if io.key_ctrl:
+                pass
+            
             self.is_open = imgui.show_about_window(closable=True)
 
     def draw_content(self):
@@ -107,10 +116,6 @@ class ImguiAboutWindow(Window):
 class CanvasWindow(Window, ABC):
     """
     An abstract base class for an ImGui window that displays a pixel buffer.
-
-    This class handles the creation, updating, and rendering of an OpenGL
-    texture. Subclasses must implement `update_pixels` and can optionally
-    override `draw_controls` and `handle_interaction`.
     """
     def __init__(self, title: str, width: int, height: int):
         super().__init__(title)
@@ -123,7 +128,12 @@ class CanvasWindow(Window, ABC):
 
     def draw(self):
         """The main rendering method."""
-        imgui.begin(self.title)
+        io = imgui.get_io()
+        flags = imgui.WindowFlags.NONE
+        if io.key_ctrl:
+            flags |= imgui.WindowFlags.NO_MOVE
+            
+        imgui.begin(self.title, flags=flags)
 
         self.draw_controls()
         self.update_pixels(self.pixels)
@@ -139,22 +149,18 @@ class CanvasWindow(Window, ABC):
     def update_pixels(self, pixels: np.ndarray):
         """
         Subclasses MUST implement this method.
-        Modify the 'pixels' numpy array in place to update the canvas content.
         """
         pass
 
     def draw_controls(self):
         """
-        Subclasses can optionally override this to add ImGui widgets
-        before the canvas is drawn.
+        Subclasses can optionally override this.
         """
         pass
 
     def handle_interaction(self):
         """
-        Subclasses can optionally override this to handle interaction
-        (e.g., mouse drawing) *after* the canvas is drawn.
-        imgui.is_item_hovered() can be used here.
+        Subclasses can optionally override this.
         """
         pass
 
@@ -168,8 +174,6 @@ class CanvasFullWindow(Window, ABC):
     """
     An abstract base class for an ImGui window that tightly encapsulates a
     pixel buffer, with no padding or borders around the image.
-
-    The window's content area will be sized exactly to the texture.
     """
     def __init__(self, title: str, width: int, height: int, closable: bool = True):
         super().__init__(title)
@@ -191,6 +195,11 @@ class CanvasFullWindow(Window, ABC):
         imgui.set_next_window_content_size((self.width, self.height))
 
         flags = imgui.WindowFlags.NO_SCROLLBAR | imgui.WindowFlags.NO_SCROLL_WITH_MOUSE
+        
+        # --- GLOBAL DRAG-DISABLE LOGIC (for this custom draw method) ---
+        io = imgui.get_io()
+        if io.key_ctrl:
+            flags |= imgui.WindowFlags.NO_MOVE
         
         opened, self.is_open = imgui.begin(
             self.title, closable=self.closable, flags=flags

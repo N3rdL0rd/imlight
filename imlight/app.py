@@ -64,7 +64,10 @@ class UniversesWindow(Window):
             imgui.end_table()
 
             if universe_to_remove_index is not None:
-                self.app.universes.pop(universe_to_remove_index)
+                removed_universe = self.app.universes.pop(universe_to_remove_index)
+                fixtures_to_deselect = [f for f in self.app.selected_fixtures if f in removed_universe.fixtures]
+                for f in fixtures_to_deselect:
+                    self.app.selected_fixtures.remove(f)
                 
 class PatchWindow(Window):
     def __init__(self, app: "App"):
@@ -137,7 +140,28 @@ class PatchWindow(Window):
                 for fixture in target_universe.fixtures:
                     imgui.table_next_row()
                     imgui.table_next_column()
-                    imgui.text(str(fixture.start_address))
+
+                    is_selected = fixture in self.app.selected_fixtures
+                    
+                    # Make the first cell a selectable that spans the whole row
+                    changed, _ = imgui.selectable(
+                        f"{fixture.start_address}##{fixture.start_address}",
+                        is_selected,
+                        flags=imgui.SelectableFlags.SPAN_ALL_COLUMNS
+                    )
+
+                    # Handle selection logic
+                    if changed:
+                        io = imgui.get_io()
+                        if io.key_ctrl: # Ctrl-click to toggle
+                            if is_selected:
+                                self.app.selected_fixtures.remove(fixture)
+                            else:
+                                self.app.selected_fixtures.append(fixture)
+                        else: # Simple click to select only one
+                            self.app.selected_fixtures.clear()
+                            self.app.selected_fixtures.append(fixture)
+
                     imgui.table_next_column()
                     imgui.text(fixture.profile.model)
                     imgui.table_next_column()
@@ -151,6 +175,8 @@ class PatchWindow(Window):
 
             if fixture_to_remove is not None:
                 target_universe.fixtures.remove(fixture_to_remove)
+                if fixture_to_remove in self.app.selected_fixtures:
+                    self.app.selected_fixtures.remove(fixture_to_remove)
                 self.status_message = "Removed fixture!"
                 self.status_is_error = False
                 
@@ -196,6 +222,10 @@ class GridviewWindow(Window):
         super().__init__("Gridview")
         self.app = app
         self.is_open = True 
+        
+        self.is_drag_selecting = False
+        self.drag_start_pos = (0, 0)
+        self.fixtures_in_drag_rect = set()
 
     def pre_draw(self):
         imgui.set_next_window_size((800, 600), imgui.Cond.FIRST_USE_EVER)
@@ -203,8 +233,25 @@ class GridviewWindow(Window):
 
     def draw_content(self):
         """Draws the grid of all fixtures across all universes."""
+        io = imgui.get_io()
         
-        # --- CHANGE 1: Make the tiles smaller and square ---
+        if io.key_ctrl and imgui.is_mouse_clicked(imgui.MouseButton.LEFT) and imgui.is_window_focused():
+            print("DRAGGING!")
+            self.is_drag_selecting = True
+            self.drag_start_pos = io.mouse_pos
+            self.fixtures_in_drag_rect.clear()
+
+        if self.is_drag_selecting and imgui.is_mouse_released(imgui.MouseButton.LEFT):
+            current_selection_set = set(self.app.selected_fixtures)
+            final_selection_set = current_selection_set.union(self.fixtures_in_drag_rect)
+            self.app.selected_fixtures = list(final_selection_set)
+            
+            self.is_drag_selecting = False
+            self.fixtures_in_drag_rect.clear()
+            
+        if self.is_drag_selecting:
+            self.fixtures_in_drag_rect.clear()
+
         tile_size = 60
         tile_spacing = 4
         
@@ -215,16 +262,36 @@ class GridviewWindow(Window):
 
         for universe in self.app.universes:
             for fixture in universe.fixtures:
-                # Pass the single size value to the draw helper
                 self._draw_fixture_tile(fixture, tile_size)
+                
+                if self.is_drag_selecting:
+                    min_rect = imgui.get_item_rect_min()
+                    max_rect = imgui.get_item_rect_max()
+                    
+                    drag_rect_min_x = min(self.drag_start_pos[0], io.mouse_pos[0])
+                    drag_rect_min_y = min(self.drag_start_pos[1], io.mouse_pos[1])
+                    drag_rect_max_x = max(self.drag_start_pos[0], io.mouse_pos[0])
+                    drag_rect_max_y = max(self.drag_start_pos[1], io.mouse_pos[1])
+
+                    if (max_rect[0] >= drag_rect_min_x and min_rect[0] <= drag_rect_max_x and
+                        max_rect[1] >= drag_rect_min_y and min_rect[1] <= drag_rect_max_y):
+                        self.fixtures_in_drag_rect.add(fixture)
+                
                 imgui.next_column()
 
         imgui.columns(1)
+        
+        if self.is_drag_selecting:
+            foreground_draw_list = imgui.get_foreground_draw_list()
+            rect_color = imgui.get_color_u32((0.2, 0.4, 1.0, 0.25))
+            border_color = imgui.get_color_u32((0.4, 0.6, 1.0, 0.8))
+            foreground_draw_list.add_rect_filled(self.drag_start_pos, io.mouse_pos, rect_color)
+            foreground_draw_list.add_rect(self.drag_start_pos, io.mouse_pos, border_color, thickness=1.0)
+
 
     def _get_fixture_color(self, fixture: ActiveFixture) -> Tuple[float, float, float, float]:
         """
         Intelligently determines the RGBA color for a fixture's tile.
-        (This method remains unchanged as its logic is still correct)
         """
         r, g, b = 0.0, 0.0, 0.0
         has_color = False
@@ -245,47 +312,55 @@ class GridviewWindow(Window):
     def _draw_fixture_tile(self, fixture: ActiveFixture, size: float):
         """
         Draws a compact, single tile representing one fixture.
-        - The tile is primarily a color swatch.
-        - The address is drawn on top of the swatch.
-        - A tooltip on hover reveals the fixture's name and model.
         """
-        
-        # We push a style to remove the padding within the child window,
-        # so the color button can fill the entire space.
         imgui.push_style_var(imgui.StyleVar.WINDOW_PADDING, (0, 0))
-        
-        # The child window acts as our tile container.
         imgui.begin_child(f"fixture_{fixture.start_address}", size=(size, size))
         
-        start_pos = imgui.get_cursor_screen_pos()
-        
-        color = self._get_fixture_color(fixture)
-        
-        imgui.color_button("##color_swatch", color, 
-                             flags=imgui.ColorEditFlags.NO_TOOLTIP, 
-                             size=(size, size))
-        
         draw_list = imgui.get_window_draw_list()
+        start_pos = imgui.get_cursor_screen_pos()
+        end_pos = (start_pos[0] + size, start_pos[1] + size)
+        color = self._get_fixture_color(fixture)
+        draw_list.add_rect_filled(start_pos, end_pos, imgui.get_color_u32(color))
+        
+        imgui.set_cursor_screen_pos(start_pos)
+        
+        if imgui.invisible_button(f"##tile_{fixture.start_address}", (size, size)) and not self.is_drag_selecting:
+            io = imgui.get_io()
+            is_selected = fixture in self.app.selected_fixtures
+            if io.key_ctrl:
+                if is_selected:
+                    self.app.selected_fixtures.remove(fixture)
+                else:
+                    self.app.selected_fixtures.append(fixture)
+            else:
+                self.app.selected_fixtures.clear()
+                if not is_selected:
+                    self.app.selected_fixtures.append(fixture)
+
         luminance = 0.299 * color[0] + 0.587 * color[1] + 0.114 * color[2]
         text_color = imgui.get_color_u32((1,1,1,1)) if luminance < 0.5 else imgui.get_color_u32((0,0,0,1))
-
         text = f"@{fixture.start_address}"
         padding = 4
         draw_list.add_text((start_pos[0] + padding, start_pos[1] + padding), text_color, text)
         
         imgui.end_child()
         imgui.pop_style_var()
-
         
+        is_selected = fixture in self.app.selected_fixtures or fixture in self.fixtures_in_drag_rect
+        
+        if is_selected:
+            min_rect = imgui.get_item_rect_min()
+            max_rect = imgui.get_item_rect_max()
+            draw_list = imgui.get_foreground_draw_list()
+            draw_list.add_rect(min_rect, max_rect, imgui.get_color_u32((1, 1, 0, 1)), thickness=2)
+
         if imgui.is_item_hovered():
             imgui.begin_tooltip()
-            imgui.text(f"{fixture.profile.manufacturer}")
-            imgui.text(f"{fixture.profile.model}")
+            imgui.text(fixture.name)
             imgui.separator()
             intensity_percent = (fixture.intensity / 255.0) if "intensity" in fixture.profile.channel_map else 1.0 # type: ignore
             imgui.text(f"Intensity: {intensity_percent:.0%}")
             imgui.end_tooltip()
-        
 
 class App:
     def __init__(self, window: Any, renderer: GlfwRenderer):
@@ -296,6 +371,8 @@ class App:
         self.gridview_window = GridviewWindow(self)
         self.windows: List[Window] = [self.universes_window, self.patch_window, self.gridview_window, ImguiAboutWindow()]
         self.universes: List[DMXUniverse] = []
+        
+        self.selected_fixtures: List[ActiveFixture] = []
         
     def update_universes(self):
         for universe in self.universes:
