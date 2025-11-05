@@ -11,17 +11,17 @@ RGB_PAR = FixtureProfile(
         ChannelDefinition("red", ChannelType.RED, 0),
         ChannelDefinition("green", ChannelType.GREEN, 1),
         ChannelDefinition("blue", ChannelType.BLUE, 2),
-    )
+    ),
 )
+
 
 def make_dimmer(name: str) -> FixtureProfile:
     return FixtureProfile(
         manufacturer="Generic",
         model=name,
-        channels=(
-            ChannelDefinition("intensity", ChannelType.INTENSITY, 0),
-        )
+        channels=(ChannelDefinition("intensity", ChannelType.INTENSITY, 0),),
     )
+
 
 DIMMER = make_dimmer("Dimmer")
 FRESNEL = make_dimmer("Fresnel")

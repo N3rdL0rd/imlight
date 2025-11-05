@@ -5,18 +5,19 @@ from slimgui import imgui
 from abc import ABC, abstractmethod
 from PIL import Image
 
+
 def create_texture_from_numpy(pixels: np.ndarray) -> int:
     """Creates an OpenGL texture from a NumPy array."""
     height, width, channels = pixels.shape
-    
+
     texture_id = GL.glGenTextures(1)
     GL.glBindTexture(GL.GL_TEXTURE_2D, texture_id)
-    
+
     GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR)
     GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
     GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_S, GL.GL_CLAMP_TO_EDGE)
     GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_CLAMP_TO_EDGE)
-    
+
     if channels == 3:
         fmt = GL.GL_RGB
     elif channels == 4:
@@ -25,17 +26,17 @@ def create_texture_from_numpy(pixels: np.ndarray) -> int:
         raise ValueError("Image must be RGB or RGBA")
 
     GL.glTexImage2D(
-        GL.GL_TEXTURE_2D, 0, fmt, width, height, 0,
-        fmt, GL.GL_UNSIGNED_BYTE, pixels
+        GL.GL_TEXTURE_2D, 0, fmt, width, height, 0, fmt, GL.GL_UNSIGNED_BYTE, pixels
     )
-    
+
     GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
     return texture_id
+
 
 def update_texture_from_numpy(texture_id: int, pixels: np.ndarray) -> None:
     """Updates an existing OpenGL texture with data from a NumPy array."""
     height, width, channels = pixels.shape
-    
+
     if channels == 3:
         fmt = GL.GL_RGB
     elif channels == 4:
@@ -45,15 +46,16 @@ def update_texture_from_numpy(texture_id: int, pixels: np.ndarray) -> None:
 
     GL.glBindTexture(GL.GL_TEXTURE_2D, texture_id)
     GL.glTexSubImage2D(
-        GL.GL_TEXTURE_2D, 0, 0, 0, width, height,
-        fmt, GL.GL_UNSIGNED_BYTE, pixels
+        GL.GL_TEXTURE_2D, 0, 0, 0, width, height, fmt, GL.GL_UNSIGNED_BYTE, pixels
     )
     GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
+
 
 class Window(ABC):
     """
     The updated base class with pre/post draw hooks and a close hook.
     """
+
     def __init__(self, title: str):
         self.title = title
         self.is_open: bool = True
@@ -64,7 +66,7 @@ class Window(ABC):
         It orchestrates the pre_draw, begin, draw_content, end, and post_draw calls.
         """
         self.pre_draw()
-        
+
         io = imgui.get_io()
         flags = imgui.WindowFlags.NONE
         if io.key_ctrl:
@@ -72,7 +74,7 @@ class Window(ABC):
 
         was_open = self.is_open
         opened, self.is_open = imgui.begin(self.title, closable=True, flags=flags)
-        
+
         if was_open and not self.is_open:
             self.on_close()
 
@@ -81,7 +83,7 @@ class Window(ABC):
 
         imgui.end()
         self.post_draw()
-        
+
     def pre_draw(self):
         """Optional hook for subclasses, called before imgui.begin()."""
         pass
@@ -98,7 +100,8 @@ class Window(ABC):
     def on_close(self):
         """Optional hook called when the window is closed by the user."""
         pass
-    
+
+
 class ImguiAboutWindow(Window):
     def __init__(self):
         super().__init__("About imgui")
@@ -109,23 +112,25 @@ class ImguiAboutWindow(Window):
             io = imgui.get_io()
             if io.key_ctrl:
                 pass
-            
+
             self.is_open = imgui.show_about_window(closable=True)
 
     def draw_content(self):
         pass
-    
+
+
 class CanvasWindow(Window, ABC):
     """
     An abstract base class for an ImGui window that displays a pixel buffer.
     """
+
     def __init__(self, title: str, width: int, height: int):
         super().__init__(title)
         self.width = width
         self.height = height
 
         self.pixels = np.zeros((self.height, self.width, 4), dtype=np.uint8)
-        
+
         self.texture_id = create_texture_from_numpy(self.pixels)
 
     def draw(self):
@@ -134,12 +139,12 @@ class CanvasWindow(Window, ABC):
         flags = imgui.WindowFlags.NONE
         if io.key_ctrl:
             flags |= imgui.WindowFlags.NO_MOVE
-            
+
         imgui.begin(self.title, flags=flags)
 
         self.draw_controls()
         self.update_pixels(self.pixels)
-        
+
         assert self.texture_id is not None
         update_texture_from_numpy(self.texture_id, self.pixels)
         imgui.image(self.texture_id, (self.width, self.height))
@@ -171,12 +176,14 @@ class CanvasWindow(Window, ABC):
         if self.texture_id is not None:
             GL.glDeleteTextures([self.texture_id])
             self.texture_id = None
-            
+
+
 class CanvasFullWindow(Window, ABC):
     """
     An abstract base class for an ImGui window that tightly encapsulates a
     pixel buffer, with no padding or borders around the image.
     """
+
     def __init__(self, title: str, width: int, height: int, closable: bool = True):
         super().__init__(title)
         self.width = width
@@ -197,12 +204,12 @@ class CanvasFullWindow(Window, ABC):
         imgui.set_next_window_content_size((self.width, self.height))
 
         flags = imgui.WindowFlags.NO_SCROLLBAR | imgui.WindowFlags.NO_SCROLL_WITH_MOUSE
-        
+
         # --- GLOBAL DRAG-DISABLE LOGIC (for this custom draw method) ---
         io = imgui.get_io()
         if io.key_ctrl:
             flags |= imgui.WindowFlags.NO_MOVE
-        
+
         opened, self.is_open = imgui.begin(
             self.title, closable=self.closable, flags=flags
         )
@@ -231,9 +238,11 @@ class CanvasFullWindow(Window, ABC):
         if self.texture_id is not None:
             GL.glDeleteTextures([self.texture_id])
             self.texture_id = None
-            
+
+
 class AspectLockedWindow(Window, ABC):
     """A window that maintains a constant aspect ratio when resized."""
+
     def __init__(self, title: str, aspect_ratio: float):
         super().__init__(title)
         if aspect_ratio <= 0:
@@ -242,10 +251,17 @@ class AspectLockedWindow(Window, ABC):
 
     def get_aspect_ratio_func(self):
         aspect_ratio = self.aspect_ratio
-        def cb(_pos: Tuple[float, float], _current_size: Tuple[float, float], desired_size: Tuple[float, float], _int_user_data: int) -> Tuple[float, float]:
+
+        def cb(
+            _pos: Tuple[float, float],
+            _current_size: Tuple[float, float],
+            desired_size: Tuple[float, float],
+            _int_user_data: int,
+        ) -> Tuple[float, float]:
             nonlocal aspect_ratio
             new_desired_y = int(desired_size[0] / aspect_ratio)
             return (desired_size[0], new_desired_y)
+
         return cb
 
     def pre_draw(self):
@@ -254,11 +270,13 @@ class AspectLockedWindow(Window, ABC):
         imgui.set_next_window_size_constraints(
             size_min=(100, 100 / self.aspect_ratio),
             size_max=(5000, 2000 / self.aspect_ratio),
-            cb=self.get_aspect_ratio_func()
+            cb=self.get_aspect_ratio_func(),
         )
+
 
 class TexturedWindow(AspectLockedWindow, ABC):
     """An aspect-locked window with an image drawn over its entire background."""
+
     def __init__(self, title: str, aspect_ratio: float, image_path: str):
         super().__init__(title, aspect_ratio)
         self.texture_id = None
@@ -280,14 +298,14 @@ class TexturedWindow(AspectLockedWindow, ABC):
         self.pre_draw()
 
         io = imgui.get_io()
-        flags = imgui.WindowFlags.NO_SCROLLBAR # No scrollbar for this type of window
+        flags = imgui.WindowFlags.NO_SCROLLBAR  # No scrollbar for this type of window
         if io.key_ctrl:
             flags |= imgui.WindowFlags.NO_MOVE
         flags |= imgui.WindowFlags.NO_BACKGROUND
 
         was_open = self.is_open
         opened, self.is_open = imgui.begin(self.title, closable=True, flags=flags)
-        
+
         if was_open and not self.is_open:
             self.on_close()
 
@@ -296,13 +314,15 @@ class TexturedWindow(AspectLockedWindow, ABC):
                 draw_list = imgui.get_background_draw_list()
                 pos = imgui.get_window_pos()
                 size = imgui.get_window_size()
-                draw_list.add_image(self.texture_id, pos, (pos[0] + size[0], pos[1] + size[1]))
-            
+                draw_list.add_image(
+                    self.texture_id, pos, (pos[0] + size[0], pos[1] + size[1])
+                )
+
             self.draw_content()
 
         imgui.end()
         self.post_draw()
-        
+
     def __del__(self):
         """Clean up the OpenGL texture."""
         if self.texture_id is not None:

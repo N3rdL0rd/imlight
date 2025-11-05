@@ -14,7 +14,7 @@ COLORSOURCE_SPOT_V = FixtureProfile(
         ChannelDefinition("blue", ChannelType.BLUE, 3),
         ChannelDefinition("strobe", ChannelType.STROBE, 4),
         ChannelDefinition("fan", ChannelType.FAN, 5),
-    )
+    ),
 )
 
 COLORSOURCE_SPOT_V_DIRECT = FixtureProfile(
@@ -29,7 +29,7 @@ COLORSOURCE_SPOT_V_DIRECT = FixtureProfile(
         ChannelDefinition("lime", ChannelType.LIME, 5),
         ChannelDefinition("strobe", ChannelType.STROBE, 6),
         ChannelDefinition("fan", ChannelType.FAN, 7),
-    )
+    ),
 )
 
 COLORSOURCE_FRESNEL_V = FixtureProfile(
@@ -43,7 +43,7 @@ COLORSOURCE_FRESNEL_V = FixtureProfile(
         ChannelDefinition("strobe", ChannelType.STROBE, 4),
         ChannelDefinition("zoom", ChannelType.ZOOM, 5),
         ChannelDefinition("fan", ChannelType.FAN, 6),
-    )
+    ),
 )
 
 COLORSOURCE_FRESNEL_V_DIRECT = FixtureProfile(
@@ -59,6 +59,5 @@ COLORSOURCE_FRESNEL_V_DIRECT = FixtureProfile(
         ChannelDefinition("strobe", ChannelType.STROBE, 6),
         ChannelDefinition("zoom", ChannelType.ZOOM, 7),
         ChannelDefinition("fan", ChannelType.FAN, 8),
-    )
+    ),
 )
-

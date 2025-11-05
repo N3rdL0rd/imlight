@@ -5,8 +5,10 @@ from slimgui.integrations.glfw import GlfwRenderer
 
 from .app import App
 
+
 def _key_callback(_window, key, _scan, action, _mods):
     pass
+
 
 def main():
     glfw.init()
@@ -17,14 +19,16 @@ def main():
     glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
     glfw.window_hint(glfw.VISIBLE, True)
 
-    glfw_window = glfw.create_window(width=1920, height=1080, title="imlight", monitor=None, share=None)
+    glfw_window = glfw.create_window(
+        width=1920, height=1080, title="imlight", monitor=None, share=None
+    )
     glfw.make_context_current(glfw_window)
 
     imgui.create_context()
     io = imgui.get_io()
     io.config_flags |= imgui.ConfigFlags.NAV_ENABLE_KEYBOARD
     renderer = GlfwRenderer(glfw_window, prev_key_callback=_key_callback)
-    
+
     app = App(glfw_window, renderer)
 
     while not (glfw.window_should_close(glfw_window)):
@@ -43,6 +47,7 @@ def main():
 
     renderer.shutdown()
     imgui.destroy_context(None)
+
 
 if __name__ == "__main__":
     main()
