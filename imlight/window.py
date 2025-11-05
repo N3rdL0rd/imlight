@@ -59,6 +59,7 @@ class Window(ABC):
     def __init__(self, title: str):
         self.title = title
         self.is_open: bool = True
+        self.window_flags: imgui.WindowFlags = imgui.WindowFlags.NONE
 
     def draw(self):
         """
@@ -68,7 +69,7 @@ class Window(ABC):
         self.pre_draw()
 
         io = imgui.get_io()
-        flags = imgui.WindowFlags.NONE
+        flags = self.window_flags
         if io.key_ctrl:
             flags |= imgui.WindowFlags.NO_MOVE
 

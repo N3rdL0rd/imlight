@@ -3,7 +3,7 @@
 (In no particular order)
 
 - [x] Stage map view
-- [ ] Python scripting API, REPL window (or other CLI with shorthand), ability to run code inline (or an editor of sorts)
+- [x] Python scripting API, REPL window (or other CLI with shorthand), ability to run code inline (or an editor of sorts)
 - [ ] Scroll to change selected channel type across selection
 - [ ] Internal IDs separate from DMX IDs/universe for better mapping
 - [ ] `Display` tab on top menu to change rendered ID (DMX or internal ID)
@@ -21,3 +21,4 @@
 - [ ] Fix Linux wayland hidpi
 - [ ] Document things better and make a help menu
 - [ ] Interactive tutorial/explainer for layers
+- [ ] Fader window

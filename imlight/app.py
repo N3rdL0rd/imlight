@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from enum import Enum
 import io
 import jedi
 import contextlib
@@ -7,7 +8,7 @@ from slimgui.integrations.glfw import GlfwRenderer
 from typing import Callable, List, Any, Tuple
 from slimgui import imgui
 
-from .fixture import ActiveFixture, DMXUniverse, DRIVERS
+from .fixture import ActiveFixture, ChannelType, DMXUniverse, DRIVERS
 from .fixture.all import ALL_FIXTURES
 from .window import TexturedWindow, Window, ImguiAboutWindow
 
@@ -438,6 +439,8 @@ class GridviewWindow(Window):
         if imgui.is_item_hovered():
             imgui.begin_tooltip()
             imgui.text(fixture.name)
+            if fixture.name != fixture.profile.model:
+                imgui.text(f"{fixture.profile.manufacturer} - {fixture.profile.model}")
             imgui.separator()
             intensity_percent = (
                 (fixture.intensity / 255.0)  # type: ignore
@@ -465,8 +468,8 @@ class StageviewWindow(TexturedWindow):
 
     def pre_draw(self):
         super().pre_draw()
-        imgui.set_next_window_pos((580, 520), imgui.Cond.FIRST_USE_EVER)
-        imgui.set_next_window_size((780, 150), imgui.Cond.FIRST_USE_EVER)
+        imgui.set_next_window_pos((1370, 30), imgui.Cond.FIRST_USE_EVER)
+        imgui.set_next_window_size((730, 780), imgui.Cond.FIRST_USE_EVER)
 
     def draw_content(self):
         draw_list = imgui.get_window_draw_list()
@@ -481,8 +484,8 @@ class StageviewWindow(TexturedWindow):
             for i in range(1, num_electrics + 1):
                 y_pos = window_pos[1] + (i / (num_electrics + 1)) * top_third_height
                 draw_list.add_line(
-                    (window_pos[0], y_pos),
-                    (window_pos[0] + window_size[0], y_pos),
+                    (window_pos[0] + window_size[0] / 20, y_pos),
+                    (window_pos[0] + window_size[0] - window_size[0] / 20, y_pos),
                     line_color,
                     thickness=2,
                 )
@@ -709,8 +712,8 @@ class CommanderWindow(Window):
         self.commands, self.unique_commands = self._define_commands()
 
     def pre_draw(self):
-        imgui.set_next_window_size((800, 400), imgui.Cond.FIRST_USE_EVER)
-        imgui.set_next_window_pos((840, 380), imgui.Cond.FIRST_USE_EVER)
+        imgui.set_next_window_pos((580, 520), imgui.Cond.FIRST_USE_EVER)
+        imgui.set_next_window_size((780, 290), imgui.Cond.FIRST_USE_EVER)
 
     def draw_content(self):
         for command, output in self.history:
@@ -938,6 +941,19 @@ class CommanderWindow(Window):
                 aliases=[],
                 arguments=[Argument("num", "The number of electrics", "0-8")],
             ),
+            Command(
+                name="name",
+                description="Sets the name of the selected fixture, or if multiple are selected, sets their names with sequential appended numbers.",
+                handler=self._command_name,
+                aliases=["n"],
+                arguments=[
+                    Argument(
+                        "name",
+                        "The name to set for a single fixture, or the base name to set for multiple",
+                        "<name>",
+                    )
+                ],
+            ),
         ]
 
         command_map = {}
@@ -947,7 +963,20 @@ class CommanderWindow(Window):
                 command_map[alias] = cmd
         return command_map, cmds
 
-    def _command_electrics(self, *args):
+    def _command_name(self, *args: str):
+        if not args:
+            return "Error: Missing argument. Usage: name <name>"
+        if not (len(self.app.selected_fixtures) >= 1):
+            return "Error: Please select at least one fixture to set the name of."
+        name = args[0]
+        if len(self.app.selected_fixtures) == 1:
+            self.app.selected_fixtures[0].name = name
+        else:
+            for i, fixture in enumerate(self.app.selected_fixtures):
+                fixture.name = f"{name} {i + 1}"
+        return f"Renamed {len(self.app.selected_fixtures)} fixture{'s' if len(self.app.selected_fixtures) > 1 else ''}."
+
+    def _command_electrics(self, *args: str):
         if not args:
             return "Error: Missing argument. Usage: select <num>"
         num = int(args[0])
@@ -968,6 +997,12 @@ class CommanderWindow(Window):
 
     def _find_fixtures(self, target: str) -> List["ActiveFixture"]:
         found = []
+        if target == "*":
+            res = []
+            for u in self.app.universes:
+                for f in u.fixtures:
+                    res.append(f)
+            return res
         if target.startswith("@"):
             try:
                 address = int(target[1:])
@@ -1047,6 +1082,110 @@ class CommanderWindow(Window):
             msg += f" ({unsupported_count} selected fixture(s) do not support this channel)."
         return msg
 
+        
+class FaderDisplayMode(Enum):
+    FOLLOW_SELECTION = "Follow Selection"
+    ALL_PATCHED = "All Patched"
+    FILTER = "Filter (NYI)"
+
+class FaderWindow(Window):
+    def __init__(self, app: "App"):
+        super().__init__("Faders")
+        self.app = app
+        self.is_open = True
+        self.target_layer = "main"
+        self.display_mode = FaderDisplayMode.FOLLOW_SELECTION
+        self.window_flags |= imgui.WindowFlags.MENU_BAR
+
+    def pre_draw(self):
+        imgui.set_next_window_size((780, 340), imgui.Cond.FIRST_USE_EVER)
+        imgui.set_next_window_pos((580, 820), imgui.Cond.FIRST_USE_EVER)
+
+    def _draw_menu_bar(self):
+        if imgui.begin_menu_bar():
+            if imgui.begin_menu("Layer"):
+                imgui.text("Target Layer:")
+                changed, self.target_layer = imgui.input_text(
+                    "##layer_name", self.target_layer, flags=imgui.InputTextFlags.ENTER_RETURNS_TRUE
+                )
+                imgui.end_menu()
+
+            if imgui.begin_menu("Mode"):
+                for mode in FaderDisplayMode:
+                    changed, _ = imgui.menu_item(
+                        mode.value, selected=(self.display_mode == mode)
+                    )
+                    if changed:
+                        self.display_mode = mode
+                imgui.end_menu()
+
+            imgui.end_menu_bar()
+
+    def _get_channel_name_for_type(
+        self, fixture: ActiveFixture, channel_type: ChannelType
+    ) -> str | None:
+        for ch_def in fixture.profile.channels:
+            if ch_def.channel_type == channel_type:
+                return ch_def.name
+        return None
+
+    def draw_content(self):
+        self._draw_menu_bar()
+
+        fixtures_to_show = []
+        if self.display_mode == FaderDisplayMode.FOLLOW_SELECTION:
+            fixtures_to_show = self.app.selected_fixtures
+        elif self.display_mode == FaderDisplayMode.ALL_PATCHED:
+            for u in self.app.universes:
+                fixtures_to_show.extend(u.fixtures)
+        fixtures_to_show.sort(key=lambda f: f.start_address)
+
+        if not fixtures_to_show:
+            imgui.text("No fixtures to display.")
+            return
+
+        relevant_fixtures = []
+        for f in fixtures_to_show:
+            channel_name = self._get_channel_name_for_type(f, self.app.channel_type)
+            if channel_name is not None:
+                relevant_fixtures.append((f, channel_name))
+
+        if not relevant_fixtures:
+            pretty_name = self.app.channel_type.name.replace("_", " ").title()
+            imgui.text(
+                f"No fixtures in the current view support the '{pretty_name}' channel."
+            )
+            return
+
+        fader_total_width = 60
+        available_width = imgui.get_content_region_avail()[0]
+        num_columns = max(1, int(available_width / fader_total_width))
+        imgui.columns(num_columns, "fader_grid", border=False)
+
+        slider_height = imgui.get_content_region_avail()[1] - 50
+
+        for fixture, channel_name in relevant_fixtures:
+            imgui.push_id(f"fader_{fixture.start_address}_{channel_name}")
+            layer = fixture.layers[self.target_layer]
+            ch_def = fixture.profile.channel_map[channel_name]
+            current_value = int(layer.dmx_values[ch_def.relative_offset])
+            changed, new_value = imgui.vslider_int(
+                "##vslider",
+                (40, slider_height),
+                current_value,
+                0,
+                255,
+            )
+            if changed:
+                setattr(layer, channel_name, new_value)
+            imgui.text(f"@{fixture.start_address}")
+            imgui.push_font(None, font_size_base=11)
+            imgui.text_wrapped(fixture.name)
+            imgui.pop_font()
+            imgui.next_column()
+            imgui.pop_id()
+        imgui.columns(1)
+
 
 class App:
     def __init__(self, window: Any, renderer: GlfwRenderer):
@@ -1057,17 +1196,20 @@ class App:
         self.gridview_window = GridviewWindow(self)
         self.stageview_window = StageviewWindow(self)
         self.commander_window = CommanderWindow(self)
+        self.fader_window = FaderWindow(self)
         self.windows: List[Window] = [
             self.universes_window,
             self.patch_window,
             self.gridview_window,
             self.stageview_window,
             self.commander_window,
+            self.fader_window,
             ImguiAboutWindow(),
         ]
         self.universes: List[DMXUniverse] = []
         self.selected_fixtures: List[ActiveFixture] = []
         self.num_electrics: int = 4
+        self.channel_type: ChannelType = ChannelType.INTENSITY
 
     def update_universes(self):
         for universe in self.universes:
@@ -1112,6 +1254,15 @@ class App:
                 if changed:
                     self.num_electrics = 0
 
+                imgui.end_menu()
+            if imgui.begin_menu(f"Channel: {self.channel_type.name.replace("_", " ").title()}"):
+                for channel_type in ChannelType:
+                    pretty_name = channel_type.name.replace("_", " ").title()
+                    changed, _ = imgui.menu_item(
+                        pretty_name, selected=(self.channel_type == channel_type)
+                    )
+                    if changed:
+                        self.channel_type = channel_type
                 imgui.end_menu()
             imgui.end_main_menu_bar()
 
