@@ -1,10 +1,14 @@
+from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from enum import Enum, auto
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Type
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type
 import numpy as np
 
+if TYPE_CHECKING:
+    from ..app import App
 
 class ChannelType(Enum):
     """Enum for the logical function of a channel."""
@@ -71,6 +75,13 @@ class FixtureProfile:
         object.__setattr__(self, "channel_map", channel_map)
 
 
+@dataclass
+class ShowLayer:
+    """Represents a global layer's properties, managed by the App."""
+    name: str
+    priority: float = 1.0
+
+
 class Layer:
     """Represents a single layer of DMX values for a fixture."""
 
@@ -108,7 +119,10 @@ class LayerManager:
     def __getitem__(self, name: str) -> Layer:
         """Access a layer by name, creating it if it doesn't exist."""
         if name not in self._layers:
+            # If a layer is accessed that doesn't exist, create it on the fixture
+            # AND register it as a new global ShowLayer in the app.
             self._layers[name] = Layer(name, self._owner.profile, self._owner)
+            self._owner.app.add_show_layer(name)
         return self._layers[name]
 
     def __delitem__(self, name: str):
@@ -124,6 +138,9 @@ class LayerManager:
 
     def __iter__(self):
         return iter(self._layers.values())
+    
+    def keys(self):
+        return self._layers.keys()
 
     def __repr__(self) -> str:
         return f"<LayerManager layers={list(self._layers.keys())}>"
@@ -132,11 +149,13 @@ class LayerManager:
 class ActiveFixture:
     """
     Represents a physical fixture instance whose final output is composed
-    from a stack of HTP (Highest Takes Precedence) layers.
+    from a stack of HTP (Highest Takes Precedence) layers, each modulated by a
+    global priority.
     """
 
     def __init__(
         self,
+        app: "App",
         profile: FixtureProfile,
         start_address: int,
         name: Optional[str] = None,
@@ -145,10 +164,13 @@ class ActiveFixture:
         if not (1 <= start_address <= 512 - profile.channel_count + 1):
             raise ValueError("Fixture does not fit in DMX universe at this address.")
 
+        self.app = app
         self.profile = profile
         self.start_address = start_address
-
         self.layers = LayerManager(self)
+
+        for show_layer in self.app.layers:
+            self.layers._layers[show_layer.name] = Layer(show_layer.name, self.profile, self)
 
         self._final_dmx_values = np.zeros(profile.channel_count, dtype=np.uint8)
         self.compose()
@@ -160,15 +182,23 @@ class ActiveFixture:
 
     def compose(self):
         """
-        Composes all active layers using HTP (Highest Takes Precedence) logic
-        to generate the final DMX output values for this fixture.
+        Composes all active layers using HTP logic after modulating each layer
+        by its global priority.
         """
-        composed_values = np.zeros_like(self._final_dmx_values)
+        composed_values = np.zeros(self.profile.channel_count, dtype=np.float32)
 
         for layer in self.layers:
-            np.maximum(composed_values, layer.dmx_values, out=composed_values)
+            show_layer = self.app.get_show_layer(layer.name)
+            if show_layer is None:
+                continue # Should not happen in normal operation
 
-        self._final_dmx_values[:] = composed_values
+            priority = show_layer.priority
+            if priority > 0:
+                modulated_values = layer.dmx_values.astype(np.float32) * priority
+                np.maximum(composed_values, modulated_values, out=composed_values)
+
+        np.clip(composed_values, 0, 255, out=composed_values)
+        self._final_dmx_values[:] = composed_values.astype(np.uint8)
 
     def __getattr__(self, name: str) -> int | LayerManager:
         """

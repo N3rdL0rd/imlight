@@ -32,18 +32,21 @@ def main():
     app = App(glfw_window, renderer)
 
     while not (glfw.window_should_close(glfw_window)):
-        glfw.poll_events()
+        try:
+            glfw.poll_events()
 
-        gl.glClear(int(gl.GL_COLOR_BUFFER_BIT) | int(gl.GL_DEPTH_BUFFER_BIT))
-        renderer.new_frame()
-        imgui.new_frame()
+            gl.glClear(int(gl.GL_COLOR_BUFFER_BIT) | int(gl.GL_DEPTH_BUFFER_BIT))
+            renderer.new_frame()
+            imgui.new_frame()
 
-        app.draw()
+            app.draw()
 
-        imgui.render()
-        renderer.render(imgui.get_draw_data())
+            imgui.render()
+            renderer.render(imgui.get_draw_data())
 
-        glfw.swap_buffers(glfw_window)
+            glfw.swap_buffers(glfw_window)
+        except KeyboardInterrupt:
+            break
 
     renderer.shutdown()
     imgui.destroy_context(None)

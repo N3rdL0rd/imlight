@@ -5,10 +5,10 @@ import jedi
 import contextlib
 import traceback
 from slimgui.integrations.glfw import GlfwRenderer
-from typing import Callable, List, Any, Tuple
+from typing import Callable, List, Any, Optional, Tuple
 from slimgui import imgui
 
-from .fixture import ActiveFixture, ChannelType, DMXUniverse, DRIVERS
+from .fixture import ActiveFixture, ChannelType, DMXUniverse, DRIVERS, Layer, ShowLayer
 from .fixture.all import ALL_FIXTURES
 from .window import TexturedWindow, Window, ImguiAboutWindow
 
@@ -234,6 +234,7 @@ class PatchWindow(Window):
 
             for i in range(self.fixture_count):
                 fixture_to_add = ActiveFixture(
+                    app=self.app,
                     profile=fixture_profile,
                     start_address=current_address,
                     start_stagepos=(0.05 + i * 0.03, 0.05 + i * 0.03),
@@ -1087,13 +1088,87 @@ class FaderDisplayMode(Enum):
     FOLLOW_SELECTION = "Follow Selection"
     ALL_PATCHED = "All Patched"
     FILTER = "Filter (NYI)"
+    
+class LayersWindow(Window):
+    """A window for managing global show layers and their priorities."""
+    def __init__(self, app: "App"):
+        super().__init__("Layers")
+        self.app = app
+        self.new_layer_name = ""
+        self.status_message = ""
+        self.status_is_error = False
+
+    def pre_draw(self):
+        imgui.set_next_window_size((400, 300), imgui.Cond.FIRST_USE_EVER)
+        imgui.set_next_window_pos((1370, 820), imgui.Cond.FIRST_USE_EVER)
+
+    def draw_content(self):
+        imgui.text("Add New Global Layer")
+        changed, self.new_layer_name = imgui.input_text("##newlayer", self.new_layer_name, 64)
+        imgui.same_line()
+        if imgui.button("Add Layer"):
+            if not self.new_layer_name:
+                self.status_message = "Error: Layer name cannot be empty."
+                self.status_is_error = True
+            elif self.app.get_show_layer(self.new_layer_name):
+                self.status_message = "Error: A layer with this name already exists."
+                self.status_is_error = True
+            else:
+                self.app.add_show_layer(self.new_layer_name)
+                self.status_message = f"Successfully added layer '{self.new_layer_name}'."
+                self.status_is_error = False
+                self.new_layer_name = ""
+
+        if self.status_message:
+            color = (1, 0, 0, 1) if self.status_is_error else (0, 1, 0, 1)
+            imgui.text_colored(color, self.status_message)
+        
+        imgui.separator()
+        imgui.text("Layer Priorities")
+
+        if imgui.begin_table("layers_table", 3, flags=imgui.TableFlags.BORDERS):
+            imgui.table_setup_column("Name", flags=imgui.TableColumnFlags.WIDTH_STRETCH)
+            imgui.table_setup_column("Priority", flags=imgui.TableColumnFlags.WIDTH_STRETCH)
+            imgui.table_setup_column("Actions", flags=imgui.TableColumnFlags.WIDTH_FIXED, init_width_or_weight=60)
+            imgui.table_headers_row()
+
+            layer_to_remove = None
+            for i, show_layer in enumerate(self.app.layers):
+                imgui.table_next_row()
+                
+                imgui.table_next_column()
+                imgui.text(show_layer.name)
+
+                imgui.table_next_column()
+                imgui.push_item_width(-1)
+                changed, new_priority = imgui.slider_float(f"##priority_{i}", show_layer.priority, 0.0, 1.0, "%.2f")
+                if changed:
+                    show_layer.priority = new_priority
+                    for u in self.app.universes:
+                        for f in u.fixtures:
+                            f.compose()
+                imgui.pop_item_width()
+
+                imgui.table_next_column()
+                if len(self.app.layers) > 1:
+                    if imgui.button(f"Remove##{i}"):
+                        layer_to_remove = show_layer.name
+
+            imgui.end_table()
+            
+            if layer_to_remove:
+                self.app.remove_show_layer(layer_to_remove)
+                self.status_message = f"Removed layer '{layer_to_remove}'."
+                self.status_is_error = False
+
 
 class FaderWindow(Window):
     def __init__(self, app: "App"):
         super().__init__("Faders")
         self.app = app
         self.is_open = True
-        self.target_layer = "main"
+        self.target_layer = "manual"
+        self.target_channel_type = ChannelType.INTENSITY
         self.display_mode = FaderDisplayMode.FOLLOW_SELECTION
         self.window_flags |= imgui.WindowFlags.MENU_BAR
 
@@ -1103,11 +1178,11 @@ class FaderWindow(Window):
 
     def _draw_menu_bar(self):
         if imgui.begin_menu_bar():
-            if imgui.begin_menu("Layer"):
-                imgui.text("Target Layer:")
-                changed, self.target_layer = imgui.input_text(
-                    "##layer_name", self.target_layer, flags=imgui.InputTextFlags.ENTER_RETURNS_TRUE
-                )
+            if imgui.begin_menu(f"Layer: {self.target_layer}"):
+                for show_layer in self.app.layers:
+                    changed, _ = imgui.menu_item(show_layer.name, selected=(self.target_layer == show_layer.name))
+                    if changed:
+                        self.target_layer = show_layer.name
                 imgui.end_menu()
 
             if imgui.begin_menu("Mode"):
@@ -1191,12 +1266,18 @@ class App:
     def __init__(self, window: Any, renderer: GlfwRenderer):
         self.window = window
         self.renderer = renderer
+        self.layers: List[ShowLayer] = [
+            ShowLayer("manual", 1.0),
+            ShowLayer("effects", 1.0),
+            ShowLayer("cues", 1.0),
+        ]
         self.universes_window = UniversesWindow(self)
         self.patch_window = PatchWindow(self)
         self.gridview_window = GridviewWindow(self)
         self.stageview_window = StageviewWindow(self)
         self.commander_window = CommanderWindow(self)
         self.fader_window = FaderWindow(self)
+        self.layers_window = LayersWindow(self) 
         self.windows: List[Window] = [
             self.universes_window,
             self.patch_window,
@@ -1204,12 +1285,41 @@ class App:
             self.stageview_window,
             self.commander_window,
             self.fader_window,
+            self.layers_window,
             ImguiAboutWindow(),
         ]
         self.universes: List[DMXUniverse] = []
         self.selected_fixtures: List[ActiveFixture] = []
         self.num_electrics: int = 4
         self.channel_type: ChannelType = ChannelType.INTENSITY
+
+    def get_show_layer(self, name: str) -> Optional[ShowLayer]:
+        """Finds a global ShowLayer by its name."""
+        for layer in self.layers:
+            if layer.name == name:
+                return layer
+        return None
+
+    def add_show_layer(self, name: str, priority: float = 1.0):
+        """Adds a new global layer to the show and all existing fixtures."""
+        if self.get_show_layer(name):
+            return
+        
+        self.layers.append(ShowLayer(name, priority))
+        for universe in self.universes:
+            for fixture in universe.fixtures:
+                if name not in fixture.layers:
+                    fixture.layers._layers[name] = Layer(name, fixture.profile, fixture)
+    
+    def remove_show_layer(self, name: str):
+        """Removes a global layer from the show and all existing fixtures."""
+        layer_to_remove = self.get_show_layer(name)
+        if layer_to_remove:
+            self.layers.remove(layer_to_remove)
+            for universe in self.universes:
+                for fixture in universe.fixtures:
+                    if name in fixture.layers:
+                        del fixture.layers[name]
 
     def update_universes(self):
         for universe in self.universes:
