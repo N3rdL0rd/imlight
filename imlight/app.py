@@ -1,9 +1,5 @@
 from dataclasses import dataclass, field
 from enum import Enum
-import io
-import jedi
-import contextlib
-import traceback
 from slimgui.integrations.glfw import GlfwRenderer
 from typing import Callable, List, Any, Optional, Tuple
 from slimgui import imgui
@@ -99,12 +95,15 @@ class PatchWindow(Window):
 
         self.status_message: str = ""  # type: ignore
         self.status_is_error: bool = False  # type: ignore
-        self.initial_x, self.initial_y = 30, 30
-        self.spacing = 20
+        self.initial_x, self.initial_y = 0.08, 0.08
+        self.spacing = 0.03
 
-    def next_position(self):
+    def next_position(self) -> Tuple[float, float]:
         self.initial_x += self.spacing
-        # if self.initial_x >
+        if self.initial_x > 1 - self.spacing:
+            self.initial_y += self.spacing
+            self.initial_x = 0.08
+        return self.initial_x, self.initial_y
 
     def pre_draw(self):
         imgui.set_next_window_size((560, 990), imgui.Cond.FIRST_USE_EVER)
@@ -189,7 +188,7 @@ class PatchWindow(Window):
                     changed, _ = imgui.selectable(
                         f"{fixture.start_address}##{fixture.start_address}",
                         is_selected,
-                        flags=imgui.SelectableFlags.SPAN_ALL_COLUMNS,
+                        flags=imgui.SelectableFlags.ALLOW_OVERLAP | imgui.SelectableFlags.SPAN_ALL_COLUMNS
                     )
 
                     if changed:
@@ -237,7 +236,7 @@ class PatchWindow(Window):
                     app=self.app,
                     profile=fixture_profile,
                     start_address=current_address,
-                    start_stagepos=(0.05 + i * 0.03, 0.05 + i * 0.03),
+                    start_stagepos=self.next_position(),
                 )
 
                 target_universe.add_fixture(fixture_to_add)
