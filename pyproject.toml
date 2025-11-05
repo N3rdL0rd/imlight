@@ -16,5 +16,14 @@ dependencies = [
 [tool.uv]
 package = true
 
+[dependency-groups]
+dev = [
+    "mypy>=1.18.2",
+]
+
 [project.scripts]
 imlight = "imlight.main:main"
+
+[[tool.mypy.overrides]]
+module = ["untyped_package.*"]
+follow_untyped_imports = true
