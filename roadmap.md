@@ -17,7 +17,7 @@
 - [ ] Hardware integrations, homebrew firmware "driver" for colorsource boards
 - [ ] Actual hardware drivers for DMX out
 - [ ] Better stagemap images/select different bases (hopefully covered by @samfreund)
-- [ ] Snap to grid on stagemaps and maybe add special "blocking" primities (eg. scaffolding, electricals, etc) and snap to those as well
+- [x] Snap to grid on stagemaps and maybe add special "blocking" primities (eg. scaffolding, electricals, etc) and snap to those as well
 - [ ] Fix Linux wayland hidpi
 - [ ] Document things better and make a help menu
 - [ ] Interactive tutorial/explainer for layers
