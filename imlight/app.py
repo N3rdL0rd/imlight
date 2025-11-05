@@ -449,25 +449,19 @@ class GridviewWindow(Window):
 
 
 class StageviewWindow(TexturedWindow):
-    """
-    This window demonstrates the aspect lock and background texture.
-    It has a 16:9 aspect ratio and loads 'my_background.png'.
-    """
-
+    SNAP_THRESHOLD = 0.03
+    
     def __init__(self, app: "App"):
         super().__init__(
             title="Stageview", aspect_ratio=2500 / 2658, image_path="stage.png"
         )
         self.app = app
         self.is_open = True
-        
         self.is_dragging_selection = False
         self.dragged_fixtures_start_pos: dict[ActiveFixture, Tuple[float, float]] = {}
-
         self.is_marquee_selecting = False
         self.marquee_start_pos = (0, 0)
         self.fixtures_in_marquee_rect = set()
-
 
     def pre_draw(self):
         super().pre_draw()
@@ -479,6 +473,14 @@ class StageviewWindow(TexturedWindow):
         window_pos = imgui.get_window_pos()
         window_size = imgui.get_window_size()
         io = imgui.get_io()
+
+        num_electrics = self.app.num_electrics
+        if num_electrics > 0:
+            line_color = imgui.get_color_u32((0.1, 0.1, 0.1, 1.0))
+            top_third_height = window_size[1] / 3.0
+            for i in range(1, num_electrics + 1):
+                y_pos = window_pos[1] + (i / (num_electrics + 1)) * top_third_height
+                draw_list.add_line((window_pos[0], y_pos), (window_pos[0] + window_size[0], y_pos), line_color, thickness=2)
 
         if (imgui.is_window_hovered() and io.key_ctrl and io.key_shift and
                 imgui.is_mouse_clicked(imgui.MouseButton.LEFT)):
@@ -507,6 +509,15 @@ class StageviewWindow(TexturedWindow):
                 )
         
         if not imgui.is_mouse_down(imgui.MouseButton.LEFT) and self.is_dragging_selection:
+            if num_electrics > 0:
+                top_third_relative = 1.0 / 3.0
+                grid_y_positions = [(i / (num_electrics + 1)) * top_third_relative for i in range(1, num_electrics + 1)]
+                for fixture in self.dragged_fixtures_start_pos.keys():
+                    current_y = fixture.stagepos[1]
+                    closest_y = min(grid_y_positions, key=lambda y: abs(y - current_y))
+                    if abs(current_y - closest_y) <= self.SNAP_THRESHOLD:
+                        fixture.stagepos = (fixture.stagepos[0], closest_y)
+            
             self.is_dragging_selection = False
             self.dragged_fixtures_start_pos.clear()
 
@@ -531,8 +542,7 @@ class StageviewWindow(TexturedWindow):
                 draw_list.add_text((center_x - text_size[0] / 2, center_y - text_size[1] / 2), text_color, text)
 
                 imgui.set_cursor_screen_pos((center_x - fixture_radius, center_y - fixture_radius))
-                imgui.invisible_button(f"stage_fixture_{fixture.start_address}_{id(fixture)}",
-                                       (fixture_radius * 2, fixture_radius * 2))
+                imgui.invisible_button(f"stage_fixture_{fixture.start_address}_{id(fixture)}", (fixture_radius * 2, fixture_radius * 2))
 
                 if self.is_marquee_selecting:
                     marquee_min = (min(self.marquee_start_pos[0], io.mouse_pos[0]), min(self.marquee_start_pos[1], io.mouse_pos[1]))
@@ -787,7 +797,7 @@ class CommanderWindow(Window):
                 name="help",
                 description="Shows a list of all available commands.",
                 handler=self._command_help,
-                aliases=['h', '?']
+                aliases=['h']
             ),
             Command(
                 name="select",
@@ -807,20 +817,28 @@ class CommanderWindow(Window):
                 name="clear",
                 description="Clears the current fixture selection.",
                 handler=self._command_clear,
-                aliases=['c', 'cls']
+                aliases=['c']
             ),
-            # <-- NEW: The 'layer' command definition
             Command(
                 name="layer",
                 description="Sets a channel value on a layer for all selected fixtures.",
                 handler=self._command_layer,
-                aliases=['l', 'lay'],
+                aliases=['l'],
                 arguments=[
                     Argument("layer_name", "The name of the layer to modify (e.g., 'main').", "<name>"),
                     Argument("channel", "The channel to change (e.g., 'red', 'intensity').", "<channel>"),
                     Argument("value", "The DMX value to set.", "0-255")
                 ]
             ),
+            Command(
+                name="electrics",
+                description="Sets the number of stage electrics in this show.",
+                handler=self._command_electrics,
+                aliases=[],
+                arguments=[
+                    Argument("num", "The number of electrics", "0-8")
+                ]
+            )
         ]
         
         command_map = {}
@@ -830,7 +848,15 @@ class CommanderWindow(Window):
                 command_map[alias] = cmd
         return command_map, cmds
     
-    # <-- MODIFIED: Help text now shows aliases
+    
+    def _command_electrics(self, *args):
+        if not args: return "Error: Missing argument. Usage: select <num>"
+        num = int(args[0]) 
+        if num > 8 or num < 0:
+            return "Error: Please choose a number of electrics between 0 and 8."
+        self.app.num_electrics = num
+        return f"Set electric count to {num}."
+    
     def _command_help(self, *args):
         lines = ["Available Commands:"]
         for cmd in self.unique_commands:
@@ -880,7 +906,6 @@ class CommanderWindow(Window):
         self.app.selected_fixtures.clear()
         return "Selection cleared."
 
-    # <-- NEW: The handler for the 'layer' command
     def _command_layer(self, *args):
         if len(args) < 3:
             return "Error: Not enough arguments. Usage: layer <layer_name> <channel> <value>"
@@ -933,8 +958,8 @@ class App:
             ImguiAboutWindow(),
         ]
         self.universes: List[DMXUniverse] = []
-
         self.selected_fixtures: List[ActiveFixture] = []
+        self.num_electrics: int = 4
 
     def update_universes(self):
         for universe in self.universes:
@@ -963,6 +988,25 @@ class App:
 
                     if changed:
                         window.is_open = not window.is_open
+
+                imgui.end_menu()
+            if imgui.begin_menu("Stageview"):
+                imgui.text("Electrics")
+                imgui.separator()
+                for i in range(1, 9):
+                    changed, _ = imgui.menu_item(
+                        f"{i}", 
+                        selected=(self.num_electrics == i)
+                    )
+                    if changed:
+                        self.num_electrics = i
+                imgui.separator()
+                changed, _ = imgui.menu_item(
+                    "None",
+                    selected=(self.num_electrics == 0)
+                )
+                if changed:
+                    self.num_electrics = 0
 
                 imgui.end_menu()
             imgui.end_main_menu_bar()
