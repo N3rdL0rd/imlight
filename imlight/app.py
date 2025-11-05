@@ -1,5 +1,10 @@
+from dataclasses import dataclass, field
+import io
+import jedi
+import contextlib
+import traceback
 from slimgui.integrations.glfw import GlfwRenderer
-from typing import List, Any, Tuple
+from typing import Callable, List, Any, Tuple
 from slimgui import imgui
 
 from .fixture import ActiveFixture, DMXUniverse, DRIVERS
@@ -357,14 +362,14 @@ class GridviewWindow(Window):
         r, g, b = 0.0, 0.0, 0.0
         has_color = False
         if "red" in fixture.profile.channel_map:
-            r = fixture.red / 255.0
-            has_color = True  # type: ignore
+            r = fixture.red / 255.0 # type: ignore
+            has_color = True 
         if "green" in fixture.profile.channel_map:
-            g = fixture.green / 255.0
-            has_color = True  # type: ignore
+            g = fixture.green / 255.0 # type: ignore
+            has_color = True 
         if "blue" in fixture.profile.channel_map:
-            b = fixture.blue / 255.0
-            has_color = True  # type: ignore
+            b = fixture.blue / 255.0 # type: ignore
+            has_color = True 
         intensity = 1.0
         if "intensity" in fixture.profile.channel_map:
             intensity = fixture.intensity / 255.0  # type: ignore
@@ -435,10 +440,10 @@ class GridviewWindow(Window):
             imgui.text(fixture.name)
             imgui.separator()
             intensity_percent = (
-                (fixture.intensity / 255.0)
+                (fixture.intensity / 255.0) # type: ignore
                 if "intensity" in fixture.profile.channel_map
                 else 1.0
-            )  # type: ignore
+            )
             imgui.text(f"Intensity: {intensity_percent:.0%}")
             imgui.end_tooltip()
 
@@ -455,12 +460,19 @@ class StageviewWindow(TexturedWindow):
         )
         self.app = app
         self.is_open = True
-        self.dragged_fixture_start_pos: dict[ActiveFixture, Tuple[float, float]] = {}
+        
+        self.is_dragging_selection = False
+        self.dragged_fixtures_start_pos: dict[ActiveFixture, Tuple[float, float]] = {}
+
+        self.is_marquee_selecting = False
+        self.marquee_start_pos = (0, 0)
+        self.fixtures_in_marquee_rect = set()
+
 
     def pre_draw(self):
         super().pre_draw()
-        imgui.set_next_window_pos((1370, 30), imgui.Cond.FIRST_USE_EVER)
-        imgui.set_next_window_size((598, 635), imgui.Cond.FIRST_USE_EVER)
+        imgui.set_next_window_pos((580, 520), imgui.Cond.FIRST_USE_EVER)
+        imgui.set_next_window_size((780, 150), imgui.Cond.FIRST_USE_EVER)
 
     def draw_content(self):
         draw_list = imgui.get_window_draw_list()
@@ -468,93 +480,106 @@ class StageviewWindow(TexturedWindow):
         window_size = imgui.get_window_size()
         io = imgui.get_io()
 
-        fixture_radius = 10
+        if (imgui.is_window_hovered() and io.key_ctrl and io.key_shift and
+                imgui.is_mouse_clicked(imgui.MouseButton.LEFT)):
+            self.is_marquee_selecting = True
+            self.marquee_start_pos = io.mouse_pos
+            self.fixtures_in_marquee_rect.clear()
 
+        if self.is_marquee_selecting and imgui.is_mouse_released(imgui.MouseButton.LEFT):
+            current_selection_set = set(self.app.selected_fixtures)
+            final_selection_set = current_selection_set.union(self.fixtures_in_marquee_rect)
+            self.app.selected_fixtures = list(final_selection_set)
+            self.is_marquee_selecting = False
+            self.fixtures_in_marquee_rect.clear()
+        
+        if self.is_marquee_selecting:
+            self.fixtures_in_marquee_rect.clear()
+
+        if self.is_dragging_selection:
+            drag_delta = imgui.get_mouse_drag_delta(imgui.MouseButton.LEFT)
+            for fixture, start_pos in self.dragged_fixtures_start_pos.items():
+                new_x_rel = start_pos[0] + drag_delta[0] / window_size[0]
+                new_y_rel = start_pos[1] + drag_delta[1] / window_size[1]
+                fixture.stagepos = (
+                    max(0.0, min(new_x_rel, 1.0)),
+                    max(0.0, min(new_y_rel, 1.0)),
+                )
+        
+        if not imgui.is_mouse_down(imgui.MouseButton.LEFT) and self.is_dragging_selection:
+            self.is_dragging_selection = False
+            self.dragged_fixtures_start_pos.clear()
+
+        fixture_radius = 10
         for universe in self.app.universes:
             for fixture in universe.fixtures:
                 center_x = window_pos[0] + fixture.stagepos[0] * window_size[0]
                 center_y = window_pos[1] + fixture.stagepos[1] * window_size[1]
 
                 color = self._get_fixture_color(fixture)
-                color_u32 = imgui.get_color_u32(color)
+                draw_list.add_circle_filled((center_x, center_y), fixture_radius, imgui.get_color_u32(color))
 
-                draw_list.add_circle_filled(
-                    (center_x, center_y), fixture_radius, color_u32
-                )
-
-                if fixture in self.app.selected_fixtures:
-                    draw_list.add_circle(
-                        (center_x, center_y),
-                        fixture_radius + 2,
-                        imgui.get_color_u32((1, 1, 0, 1)),
-                        thickness=2,
-                    )
+                is_currently_selected = fixture in self.app.selected_fixtures or fixture in self.fixtures_in_marquee_rect
+                if is_currently_selected:
+                    draw_list.add_circle((center_x, center_y), fixture_radius + 2,
+                                         imgui.get_color_u32((1, 1, 0, 1)), thickness=2)
 
                 text = str(fixture.start_address)
                 text_size = imgui.calc_text_size(text)
-                text_pos_x = center_x - text_size[0] / 2
-                text_pos_y = center_y - text_size[1] / 2
                 luminance = 0.299 * color[0] + 0.587 * color[1] + 0.114 * color[2]
-                text_color = (
-                    imgui.get_color_u32((1, 1, 1, 1))
-                    if luminance < 0.5
-                    else imgui.get_color_u32((0, 0, 0, 1))
-                )
-                draw_list.add_text((text_pos_x, text_pos_y), text_color, text)
+                text_color = imgui.get_color_u32((1,1,1,1)) if luminance < 0.5 else imgui.get_color_u32((0,0,0,1))
+                draw_list.add_text((center_x - text_size[0] / 2, center_y - text_size[1] / 2), text_color, text)
 
-                imgui.set_cursor_screen_pos(
-                    (center_x - fixture_radius, center_y - fixture_radius)
-                )
-                imgui.invisible_button(
-                    f"stage_fixture_{fixture.start_address}_{id(fixture)}",
-                    (fixture_radius * 2, fixture_radius * 2),
-                )
+                imgui.set_cursor_screen_pos((center_x - fixture_radius, center_y - fixture_radius))
+                imgui.invisible_button(f"stage_fixture_{fixture.start_address}_{id(fixture)}",
+                                       (fixture_radius * 2, fixture_radius * 2))
 
-                if imgui.is_item_active() and io.key_ctrl:
-                    if fixture not in self.dragged_fixture_start_pos:
-                        self.dragged_fixture_start_pos[fixture] = fixture.stagepos
+                if self.is_marquee_selecting:
+                    marquee_min = (min(self.marquee_start_pos[0], io.mouse_pos[0]), min(self.marquee_start_pos[1], io.mouse_pos[1]))
+                    marquee_max = (max(self.marquee_start_pos[0], io.mouse_pos[0]), max(self.marquee_start_pos[1], io.mouse_pos[1]))
+                    if (marquee_min[0] <= center_x <= marquee_max[0] and marquee_min[1] <= center_y <= marquee_max[1]):
+                        self.fixtures_in_marquee_rect.add(fixture)
 
-                    if imgui.is_mouse_dragging(imgui.MouseButton.LEFT):
-                        drag_delta = imgui.get_mouse_drag_delta(imgui.MouseButton.LEFT)
-                        start_pos = self.dragged_fixture_start_pos[fixture]
+                if imgui.is_item_active() and io.key_ctrl and not io.key_shift:
+                    if not self.is_dragging_selection:
+                        self.is_dragging_selection = True
+                        imgui.reset_mouse_drag_delta(imgui.MouseButton.LEFT)
+                        if fixture not in self.app.selected_fixtures:
+                            self.app.selected_fixtures = [fixture]
+                        
+                        self.dragged_fixtures_start_pos.clear()
+                        for f in self.app.selected_fixtures:
+                            self.dragged_fixtures_start_pos[f] = f.stagepos
 
-                        new_x_rel = start_pos[0] + drag_delta[0] / window_size[0]
-                        new_y_rel = start_pos[1] + drag_delta[1] / window_size[1]
-
-                        fixture.stagepos = (
-                            max(0.0, min(new_x_rel, 1.0)),
-                            max(0.0, min(new_y_rel, 1.0)),
-                        )
-
-                elif imgui.is_item_clicked():
+                elif imgui.is_item_clicked() and not self.is_marquee_selecting:
                     is_selected = fixture in self.app.selected_fixtures
                     if io.key_shift:
                         if is_selected:
                             self.app.selected_fixtures.remove(fixture)
                         else:
                             self.app.selected_fixtures.append(fixture)
-                    else:
+                    elif not io.key_ctrl:
                         self.app.selected_fixtures.clear()
                         if not is_selected:
                             self.app.selected_fixtures.append(fixture)
-
-                if (
-                    not imgui.is_mouse_down(imgui.MouseButton.LEFT)
-                    and fixture in self.dragged_fixture_start_pos
-                ):
-                    del self.dragged_fixture_start_pos[fixture]
 
                 if imgui.is_item_hovered():
                     imgui.begin_tooltip()
                     imgui.text(fixture.name)
                     imgui.separator()
                     intensity_percent = (
-                        (fixture.intensity / 255.0)
+                        (fixture.intensity / 255.0) # type: ignore
                         if "intensity" in fixture.profile.channel_map
                         else 1.0
-                    )  # type: ignore
+                    )  
                     imgui.text(f"Intensity: {intensity_percent:.0%}")
                     imgui.end_tooltip()
+
+        if self.is_marquee_selecting:
+            rect_color = imgui.get_color_u32((0.2, 0.4, 1.0, 0.25))
+            border_color = imgui.get_color_u32((0.4, 0.6, 1.0, 0.8))
+            draw_list.add_rect_filled(self.marquee_start_pos, io.mouse_pos, rect_color)
+            draw_list.add_rect(self.marquee_start_pos, io.mouse_pos, border_color, thickness=1.0)
 
     def _get_fixture_color(
         self, fixture: ActiveFixture
@@ -562,14 +587,14 @@ class StageviewWindow(TexturedWindow):
         r, g, b = 0.0, 0.0, 0.0
         has_color = False
         if "red" in fixture.profile.channel_map:
-            r = fixture.red / 255.0
-            has_color = True  # type: ignore
+            r = fixture.red / 255.0 # type: ignore
+            has_color = True  
         if "green" in fixture.profile.channel_map:
-            g = fixture.green / 255.0
-            has_color = True  # type: ignore
+            g = fixture.green / 255.0 # type: ignore
+            has_color = True  
         if "blue" in fixture.profile.channel_map:
-            b = fixture.blue / 255.0
-            has_color = True  # type: ignore
+            b = fixture.blue / 255.0 # type: ignore
+            has_color = True  
         intensity = 1.0
         if "intensity" in fixture.profile.channel_map:
             intensity = fixture.intensity / 255.0  # type: ignore
@@ -578,6 +603,317 @@ class StageviewWindow(TexturedWindow):
         else:
             return (intensity, intensity, intensity, 1.0)
 
+@dataclass
+class Argument:
+    """Defines a single argument for a command."""
+    name: str
+    description: str
+    type_hint: str
+
+@dataclass
+class Command:
+    """Defines a command, its metadata, and its handler function."""
+    name: str
+    description: str
+    handler: Callable
+    aliases: List[str] = field(default_factory=list)
+    arguments: List[Argument] = field(default_factory=list)
+
+class CommanderWindow(Window):
+    """
+    An input window for executing custom, defined commands with rich
+    autocompletion and signature help.
+    """
+    def __init__(self, app: "App"):
+        super().__init__("Commander")
+        self.app = app
+        self.is_open = True
+
+        self.input_buffer = ""
+        self.history: List[Tuple[str, str]] = []
+        self.command_history: List[str] = []
+        self.command_history_pos: int = -1
+
+        self.suggestions = []
+        self.active_suggestion: int = -1
+        self.show_autocomplete = False
+
+        self.commands, self.unique_commands = self._define_commands()
+
+    def pre_draw(self):
+        imgui.set_next_window_size((800, 400), imgui.Cond.FIRST_USE_EVER)
+        imgui.set_next_window_pos((840, 380), imgui.Cond.FIRST_USE_EVER)
+
+    def draw_content(self):
+        for command, output in self.history:
+            imgui.text_colored((0.6, 0.8, 1.0, 1.0), f"> {command}")
+            if output:
+                is_error = "Error" in output or "Unknown command" in output
+                color = (1.0, 0.8, 0.8, 1.0) if is_error else (1.0,1.0,1.0,1.0)
+                imgui.push_style_color(imgui.Col.TEXT, color)
+                imgui.text_wrapped(output)
+                imgui.pop_style_color()
+        imgui.set_scroll_y(imgui.get_scroll_max_y())
+
+        self._handle_input_keyboard()
+
+        changed, self.input_buffer = imgui.input_text(
+            "##Input",
+            self.input_buffer,
+            flags=imgui.InputTextFlags.ENTER_RETURNS_TRUE
+        )
+
+        if changed:
+            self._execute_command(self.input_buffer)
+            self.input_buffer = ""
+            imgui.set_keyboard_focus_here(-1)
+            self.command_history_pos = -1
+            self.show_autocomplete = False
+
+        if imgui.is_item_focused() and self.input_buffer:
+            self._update_autocomplete()
+            self._draw_autocomplete_popup()
+            self._draw_signature_help_popup()
+        else:
+            self.show_autocomplete = False
+            
+    def _handle_input_keyboard(self):
+        if not imgui.is_item_focused():
+            return
+
+        is_up = imgui.is_key_pressed(imgui.Key.KEY_UP_ARROW)
+        is_down = imgui.is_key_pressed(imgui.Key.KEY_DOWN_ARROW)
+        is_tab = imgui.is_key_pressed(imgui.Key.KEY_TAB)
+
+        if is_up and self.command_history:
+            if self.command_history_pos < len(self.command_history) - 1:
+                self.command_history_pos += 1
+                self.input_buffer = self.command_history[-(self.command_history_pos + 1)]
+        
+        if is_down and self.command_history:
+            if self.command_history_pos > 0:
+                self.command_history_pos -= 1
+                self.input_buffer = self.command_history[-(self.command_history_pos + 1)]
+            else:
+                self.command_history_pos = -1; self.input_buffer = ""
+
+        if is_tab and self.suggestions:
+            self.active_suggestion = (self.active_suggestion + 1) % len(self.suggestions)
+            self.input_buffer = self.suggestions[self.active_suggestion]
+
+    def _execute_command(self, command_str: str):
+        if not command_str: return
+        self.command_history.append(command_str)
+        
+        parts = command_str.split()
+        cmd_name = parts[0]
+        args = parts[1:]
+        
+        command = self.commands.get(cmd_name)
+        if command:
+            try:
+                output = command.handler(*args)
+            except Exception as e:
+                output = f"Error executing command: {e}"
+        else:
+            output = f"Error: Unknown command '{cmd_name}'. Type 'help' for a list of commands."
+
+        self.history.append((command_str, str(output).strip()))
+
+    def _update_autocomplete(self):
+        cmd_name = self.input_buffer.split()[0]
+        suggestions = sorted([cmd for cmd in self.commands if cmd.startswith(cmd_name)])
+        if suggestions:
+            self.suggestions = suggestions
+            self.show_autocomplete = True
+            self.active_suggestion = -1
+        else:
+            self.show_autocomplete = False
+
+    def _draw_autocomplete_popup(self):
+        if not self.show_autocomplete: return
+        
+        rect_min = imgui.get_item_rect_min()
+        rect_max = imgui.get_item_rect_max()
+        popup_pos = (rect_min[0], rect_max[1] + 4)
+        
+        imgui.set_next_window_pos(popup_pos)
+        imgui.begin("Autocomplete", flags=imgui.WindowFlags.NO_TITLE_BAR | imgui.WindowFlags.NO_MOVE | 
+                                           imgui.WindowFlags.NO_RESIZE | imgui.WindowFlags.CHILD_WINDOW |
+                                           imgui.WindowFlags.NO_SAVED_SETTINGS)
+        
+        for i, suggestion in enumerate(self.suggestions):
+            if imgui.selectable(suggestion, self.active_suggestion == i)[0]:
+                self.input_buffer = suggestion + " "
+                self.show_autocomplete = False
+        imgui.end_child()
+
+    def _draw_signature_help_popup(self):
+        parts = self.input_buffer.split()
+        if not parts: return
+        cmd_name = parts[0]
+        command = self.commands.get(cmd_name)
+        if not command or not command.arguments: return
+
+        rect_min = imgui.get_item_rect_min()
+        rect_max = imgui.get_item_rect_max()
+        base_y = rect_max[1] + 4
+        if self.show_autocomplete:
+            base_y += len(self.suggestions) * 10
+
+        imgui.set_next_window_pos((rect_min[0], base_y))
+        imgui.begin("SignatureHelp", flags=imgui.WindowFlags.NO_TITLE_BAR | imgui.WindowFlags.NO_MOVE | 
+                                            imgui.WindowFlags.NO_RESIZE | imgui.WindowFlags.CHILD_WINDOW |
+                                            imgui.WindowFlags.NO_SAVED_SETTINGS | imgui.WindowFlags.ALWAYS_AUTO_RESIZE)
+        
+        imgui.text(command.description)
+        imgui.separator()
+        
+        current_arg_index = len(parts) - 1
+        
+        for i, arg in enumerate(command.arguments):
+            is_current = (i == current_arg_index)
+            if is_current: imgui.push_style_color(imgui.Col.TEXT, (1,1,0,1))
+            imgui.text(f"{arg.name} ({arg.type_hint}):")
+            imgui.same_line(); imgui.text(arg.description)
+            if is_current: imgui.pop_style_color()
+
+        imgui.end_child()
+
+    def _define_commands(self) -> Tuple[dict, List[Command]]:
+        """Central place to define commands, returning the full map and a unique list."""
+        cmds = [
+            Command(
+                name="help",
+                description="Shows a list of all available commands.",
+                handler=self._command_help,
+                aliases=['h', '?']
+            ),
+            Command(
+                name="select",
+                description="Selects fixtures by address or name, clearing previous selection.",
+                handler=self._command_select,
+                aliases=['s'],
+                arguments=[Argument("target", "An address like '@12' or a partial name like 'spot'.", "@<addr>|<name>")]
+            ),
+            Command(
+                name="add",
+                description="Adds fixtures to the current selection.",
+                handler=self._command_add,
+                aliases=['a'],
+                arguments=[Argument("target", "An address like '@12' or a partial name like 'spot'.", "@<addr>|<name>")]
+            ),
+            Command(
+                name="clear",
+                description="Clears the current fixture selection.",
+                handler=self._command_clear,
+                aliases=['c', 'cls']
+            ),
+            # <-- NEW: The 'layer' command definition
+            Command(
+                name="layer",
+                description="Sets a channel value on a layer for all selected fixtures.",
+                handler=self._command_layer,
+                aliases=['l', 'lay'],
+                arguments=[
+                    Argument("layer_name", "The name of the layer to modify (e.g., 'main').", "<name>"),
+                    Argument("channel", "The channel to change (e.g., 'red', 'intensity').", "<channel>"),
+                    Argument("value", "The DMX value to set.", "0-255")
+                ]
+            ),
+        ]
+        
+        command_map = {}
+        for cmd in cmds:
+            command_map[cmd.name] = cmd
+            for alias in cmd.aliases:
+                command_map[alias] = cmd
+        return command_map, cmds
+    
+    # <-- MODIFIED: Help text now shows aliases
+    def _command_help(self, *args):
+        lines = ["Available Commands:"]
+        for cmd in self.unique_commands:
+            name_str = cmd.name
+            if cmd.aliases:
+                name_str += f" ({', '.join(cmd.aliases)})"
+            arg_str = " ".join(f"<{arg.name}>" for arg in cmd.arguments)
+            lines.append(f"  {name_str} {arg_str}")
+        return "\n".join(lines)
+
+    def _find_fixtures(self, target: str) -> List['ActiveFixture']:
+        found = []
+        if target.startswith('@'):
+            try:
+                address = int(target[1:])
+                for u in self.app.universes:
+                    for f in u.fixtures:
+                        if f.start_address == address: found.append(f); break
+            except ValueError: pass
+        else:
+            for u in self.app.universes:
+                for f in u.fixtures:
+                    if target.lower() in f.name.lower(): found.append(f)
+        return found
+    
+    def _command_select(self, *args):
+        if not args: return "Error: Missing argument. Usage: select <target>"
+        target = args[0]
+        fixtures_to_select = self._find_fixtures(target)
+        if not fixtures_to_select: return f"No fixtures found matching '{target}'."
+        self.app.selected_fixtures = fixtures_to_select
+        return f"Selected {len(fixtures_to_select)} fixture(s)."
+
+    def _command_add(self, *args):
+        if not args: return "Error: Missing argument. Usage: add <target>"
+        target = args[0]
+        fixtures_to_add = self._find_fixtures(target)
+        if not fixtures_to_add: return f"No fixtures found matching '{target}'."
+        
+        current_selection = set(self.app.selected_fixtures)
+        for f in fixtures_to_add:
+            current_selection.add(f)
+        self.app.selected_fixtures = list(current_selection)
+        return f"Selection now contains {len(self.app.selected_fixtures)} fixture(s)."
+
+    def _command_clear(self, *args):
+        self.app.selected_fixtures.clear()
+        return "Selection cleared."
+
+    # <-- NEW: The handler for the 'layer' command
+    def _command_layer(self, *args):
+        if len(args) < 3:
+            return "Error: Not enough arguments. Usage: layer <layer_name> <channel> <value>"
+        
+        layer_name, channel, value_str = args[0], args[1], args[2]
+        
+        if not self.app.selected_fixtures:
+            return "Error: No fixtures selected."
+            
+        try:
+            value = int(value_str)
+            if not (0 <= value <= 255):
+                raise ValueError("Value out of 0-255 range.")
+        except ValueError:
+            return f"Error: Invalid value '{value_str}'. Must be an integer between 0 and 255."
+
+        affected_count = 0
+        unsupported_count = 0
+        for fixture in self.app.selected_fixtures:
+            # Accessing the layer via dictionary syntax creates it if it doesn't exist
+            layer = fixture.layers[layer_name]
+            
+            # Check if the fixture's profile actually supports this channel
+            if channel in fixture.profile.channel_map:
+                setattr(layer, channel, value)
+                affected_count += 1
+            else:
+                unsupported_count +=1
+        
+        msg = f"Set '{channel}' to {value} on layer '{layer_name}' for {affected_count} fixture(s)."
+        if unsupported_count > 0:
+            msg += f" ({unsupported_count} selected fixture(s) do not support this channel)."
+        return msg
 
 class App:
     def __init__(self, window: Any, renderer: GlfwRenderer):
@@ -587,11 +923,13 @@ class App:
         self.patch_window = PatchWindow(self)
         self.gridview_window = GridviewWindow(self)
         self.stageview_window = StageviewWindow(self)
+        self.commander_window = CommanderWindow(self)
         self.windows: List[Window] = [
             self.universes_window,
             self.patch_window,
             self.gridview_window,
             self.stageview_window,
+            self.commander_window,
             ImguiAboutWindow(),
         ]
         self.universes: List[DMXUniverse] = []
