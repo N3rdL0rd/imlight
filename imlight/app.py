@@ -82,8 +82,14 @@ class PatchWindow(Window):
         self.start_address: int = 1
         self.fixture_count: int = 1
         
-        self.status_message: str = ""
-        self.status_is_error: bool = False
+        self.status_message: str = "" # type: ignore
+        self.status_is_error: bool = False # type: ignore
+        self.initial_x, self.initial_y = 30, 30
+        self.spacing = 20
+        
+    def next_position(self):
+        self.initial_x += self.spacing
+        #if self.initial_x >
 
     def pre_draw(self):
         imgui.set_next_window_size((560, 990), imgui.Cond.FIRST_USE_EVER)
@@ -188,13 +194,14 @@ class PatchWindow(Window):
             fixture_profile = self.fixture_profiles[self.selected_fixture_index]
             
             current_address = self.start_address
-            
+
             for i in range(self.fixture_count):
                 fixture_to_add = ActiveFixture(
                     profile=fixture_profile, 
-                    start_address=current_address
+                    start_address=current_address,
+                    start_stagepos=(0.05 + i * 0.03, 0.05 + i * 0.03)
                 )
-                
+
                 target_universe.add_fixture(fixture_to_add)
                 
                 current_address += fixture_profile.channel_count
@@ -374,6 +381,7 @@ class StageviewWindow(TexturedWindow):
                          image_path="stage.png")
         self.app = app
         self.is_open = True
+        self.dragged_fixture_start_pos: dict[ActiveFixture, Tuple[float, float]] = {}
 
     def pre_draw(self):
         super().pre_draw()
@@ -381,7 +389,83 @@ class StageviewWindow(TexturedWindow):
         imgui.set_next_window_size((598, 635), imgui.Cond.FIRST_USE_EVER)
 
     def draw_content(self):
-        pass
+        draw_list = imgui.get_window_draw_list()
+        window_pos = imgui.get_window_pos()
+        window_size = imgui.get_window_size()
+        io = imgui.get_io()
+
+        fixture_radius = 10
+
+        for universe in self.app.universes:
+            for fixture in universe.fixtures:
+                center_x = window_pos[0] + fixture.stagepos[0] * window_size[0]
+                center_y = window_pos[1] + fixture.stagepos[1] * window_size[1]
+
+                color = self._get_fixture_color(fixture)
+                color_u32 = imgui.get_color_u32(color)
+
+                draw_list.add_circle_filled((center_x, center_y), fixture_radius, color_u32)
+
+                if fixture in self.app.selected_fixtures:
+                    draw_list.add_circle((center_x, center_y), fixture_radius + 2, imgui.get_color_u32((1, 1, 0, 1)), thickness=2)
+
+                text = str(fixture.start_address)
+                text_size = imgui.calc_text_size(text)
+                text_pos_x = center_x - text_size[0] / 2
+                text_pos_y = center_y - text_size[1] / 2
+                luminance = 0.299 * color[0] + 0.587 * color[1] + 0.114 * color[2]
+                text_color = imgui.get_color_u32((1, 1, 1, 1)) if luminance < 0.5 else imgui.get_color_u32((0, 0, 0, 1))
+                draw_list.add_text((text_pos_x, text_pos_y), text_color, text)
+
+                imgui.set_cursor_screen_pos((center_x - fixture_radius, center_y - fixture_radius))
+                imgui.invisible_button(f"stage_fixture_{fixture.start_address}_{id(fixture)}", (fixture_radius * 2, fixture_radius * 2))
+
+                if imgui.is_item_active() and io.key_ctrl:
+                    if fixture not in self.dragged_fixture_start_pos:
+                        self.dragged_fixture_start_pos[fixture] = fixture.stagepos
+
+                    if imgui.is_mouse_dragging(imgui.MouseButton.LEFT):
+                        drag_delta = imgui.get_mouse_drag_delta(imgui.MouseButton.LEFT)
+                        start_pos = self.dragged_fixture_start_pos[fixture]
+                        
+                        new_x_rel = start_pos[0] + drag_delta[0] / window_size[0]
+                        new_y_rel = start_pos[1] + drag_delta[1] / window_size[1]
+
+                        fixture.stagepos = (max(0.0, min(new_x_rel, 1.0)), max(0.0, min(new_y_rel, 1.0)))
+                
+                elif imgui.is_item_clicked():
+                    is_selected = fixture in self.app.selected_fixtures
+                    if io.key_shift:
+                        if is_selected: self.app.selected_fixtures.remove(fixture)
+                        else: self.app.selected_fixtures.append(fixture)
+                    else:
+                        self.app.selected_fixtures.clear()
+                        if not is_selected: self.app.selected_fixtures.append(fixture)
+
+                if not imgui.is_mouse_down(imgui.MouseButton.LEFT) and fixture in self.dragged_fixture_start_pos:
+                    del self.dragged_fixture_start_pos[fixture]
+
+                if imgui.is_item_hovered():
+                    imgui.begin_tooltip()
+                    imgui.text(fixture.name)
+                    imgui.separator()
+                    intensity_percent = (fixture.intensity / 255.0) if "intensity" in fixture.profile.channel_map else 1.0 # type: ignore
+                    imgui.text(f"Intensity: {intensity_percent:.0%}")
+                    imgui.end_tooltip()
+
+    def _get_fixture_color(self, fixture: ActiveFixture) -> Tuple[float, float, float, float]:
+        r, g, b = 0.0, 0.0, 0.0
+        has_color = False
+        if "red" in fixture.profile.channel_map: r = fixture.red / 255.0; has_color = True # type: ignore
+        if "green" in fixture.profile.channel_map: g = fixture.green / 255.0; has_color = True # type: ignore
+        if "blue" in fixture.profile.channel_map: b = fixture.blue / 255.0; has_color = True # type: ignore
+        intensity = 1.0
+        if "intensity" in fixture.profile.channel_map:
+            intensity = fixture.intensity / 255.0 # type: ignore
+        if has_color:
+            return (r * intensity, g * intensity, b * intensity, 1.0)
+        else:
+            return (intensity, intensity, intensity, 1.0)
 
 
 class App:

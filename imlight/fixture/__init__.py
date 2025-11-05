@@ -120,7 +120,7 @@ class ActiveFixture:
     Represents a physical fixture instance whose final output is composed
     from a stack of HTP (Highest Takes Precedence) layers.
     """
-    def __init__(self, profile: FixtureProfile, start_address: int, name: Optional[str] = None):
+    def __init__(self, profile: FixtureProfile, start_address: int, name: Optional[str] = None, start_stagepos: Optional[Tuple[float, float]] = None):
         if not (1 <= start_address <= 512 - profile.channel_count + 1):
             raise ValueError("Fixture does not fit in DMX universe at this address.")
             
@@ -133,6 +133,7 @@ class ActiveFixture:
         self.compose()
         
         self.name = name if name is not None else profile.model
+        self.stagepos: Tuple[float, float] = start_stagepos if start_stagepos is not None else (0.05, 0.05)
 
     def compose(self):
         """
