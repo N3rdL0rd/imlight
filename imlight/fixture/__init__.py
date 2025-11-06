@@ -58,6 +58,13 @@ class ChannelDefinition:
     value_mappings: Optional[List[ValueMapping]] = None  # For wheels
 
 
+class IconType(Enum):
+    GENERIC = auto()
+    FRESNEL = auto()
+    SCOOP = auto()
+    SPOT = auto()
+    HOUSE = auto()
+
 @dataclass(frozen=True)
 class FixtureProfile:
     """The immutable blueprint for a type of lighting fixture."""
@@ -66,6 +73,7 @@ class FixtureProfile:
     model: str
     channels: Tuple[ChannelDefinition, ...]
 
+    icon_type: IconType = IconType.GENERIC
     channel_count: int = field(init=False)
     channel_map: Dict[str, ChannelDefinition] = field(init=False)
 

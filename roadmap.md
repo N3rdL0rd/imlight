@@ -21,4 +21,8 @@
 - [ ] Fix Linux wayland hidpi
 - [ ] Document things better and make a help menu
 - [ ] Interactive tutorial/explainer for layers
-- [ ] Fader window
+- [x] Fader window
+- [x] Master fader
+- [ ] Relative master mode or wheel
+- [ ] Inventory tracker
+- [ ] Printable stage maps and installation diagrams

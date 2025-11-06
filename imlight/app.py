@@ -1067,10 +1067,8 @@ class CommanderWindow(Window):
         affected_count = 0
         unsupported_count = 0
         for fixture in self.app.selected_fixtures:
-            # Accessing the layer via dictionary syntax creates it if it doesn't exist
             layer = fixture.layers[layer_name]
 
-            # Check if the fixture's profile actually supports this channel
             if channel in fixture.profile.channel_map:
                 setattr(layer, channel, value)
                 affected_count += 1
@@ -1086,7 +1084,7 @@ class CommanderWindow(Window):
 class FaderDisplayMode(Enum):
     FOLLOW_SELECTION = "Follow Selection"
     ALL_PATCHED = "All Patched"
-    FILTER = "Filter (NYI)"
+    FILTER = "Filter (NYI)" # TODO: filters!
     
 class LayersWindow(Window):
     """A window for managing global show layers and their priorities."""
@@ -1103,7 +1101,7 @@ class LayersWindow(Window):
 
     def draw_content(self):
         imgui.text("Add New Global Layer")
-        changed, self.new_layer_name = imgui.input_text("##newlayer", self.new_layer_name, 64)
+        changed, self.new_layer_name = imgui.input_text("##newlayer", self.new_layer_name, imgui.InputTextFlags.ENTER_RETURNS_TRUE) 
         imgui.same_line()
         if imgui.button("Add Layer"):
             if not self.new_layer_name:
@@ -1166,8 +1164,6 @@ class FaderWindow(Window):
         super().__init__("Faders")
         self.app = app
         self.is_open = True
-        self.target_layer = "manual"
-        self.target_channel_type = ChannelType.INTENSITY
         self.display_mode = FaderDisplayMode.FOLLOW_SELECTION
         self.window_flags |= imgui.WindowFlags.MENU_BAR
 
@@ -1177,13 +1173,6 @@ class FaderWindow(Window):
 
     def _draw_menu_bar(self):
         if imgui.begin_menu_bar():
-            if imgui.begin_menu(f"Layer: {self.target_layer}"):
-                for show_layer in self.app.layers:
-                    changed, _ = imgui.menu_item(show_layer.name, selected=(self.target_layer == show_layer.name))
-                    if changed:
-                        self.target_layer = show_layer.name
-                imgui.end_menu()
-
             if imgui.begin_menu("Mode"):
                 for mode in FaderDisplayMode:
                     changed, _ = imgui.menu_item(
@@ -1240,7 +1229,7 @@ class FaderWindow(Window):
 
         for fixture, channel_name in relevant_fixtures:
             imgui.push_id(f"fader_{fixture.start_address}_{channel_name}")
-            layer = fixture.layers[self.target_layer]
+            layer = fixture.layers[self.app.active_layer_name]
             ch_def = fixture.profile.channel_map[channel_name]
             current_value = int(layer.dmx_values[ch_def.relative_offset])
             changed, new_value = imgui.vslider_int(
@@ -1259,6 +1248,55 @@ class FaderWindow(Window):
             imgui.next_column()
             imgui.pop_id()
         imgui.columns(1)
+        
+class MasterWindow(Window):
+    """A window with a single master fader for the current selection or all fixtures."""
+    def __init__(self, app: "App"):
+        super().__init__("Master")
+        self.app = app
+        self.is_open = True
+        self.master_level: int = 255
+
+        self.window_flags |= imgui.WindowFlags.NO_SCROLLBAR
+        self.window_flags |= imgui.WindowFlags.NO_COLLAPSE
+
+    def pre_draw(self):
+        imgui.set_next_window_size((80, 250), imgui.Cond.FIRST_USE_EVER)
+        imgui.set_next_window_pos((10, 850), imgui.Cond.FIRST_USE_EVER)
+
+    def draw_content(self):
+        target_fixtures = self.app.selected_fixtures
+        if not target_fixtures:
+            all_fixtures = []
+            for u in self.app.universes:
+                all_fixtures.extend(u.fixtures)
+            target_fixtures = all_fixtures
+
+        avail_width = imgui.get_content_region_avail()[0]
+        slider_width = 30
+        imgui.set_cursor_pos_x((avail_width - slider_width) * 0.5)
+
+        slider_height = imgui.get_content_region_avail()[1] - 30
+        changed, new_level = imgui.vslider_int(
+            "##master_fader",
+            (slider_width, slider_height),
+            self.master_level,
+            0,
+            255,
+            format=""
+        )
+
+        level_text = f"{self.master_level}"
+        text_width = imgui.calc_text_size(level_text)[0]
+        imgui.set_cursor_pos_x((avail_width - text_width) * 0.5)
+        imgui.text(level_text)
+
+        if changed:
+            self.master_level = new_level
+            for fixture in target_fixtures:
+                if "intensity" in fixture.profile.channel_map:
+                    active_layer = fixture.layers[self.app.active_layer_name]
+                    active_layer.intensity = self.master_level
 
 
 class App:
@@ -1268,6 +1306,7 @@ class App:
         self.layers: List[ShowLayer] = [
             ShowLayer("manual", 1.0),
             ShowLayer("effects", 1.0),
+            ShowLayer("scriptedCues", 1.0),
             ShowLayer("cues", 1.0),
         ]
         self.universes_window = UniversesWindow(self)
@@ -1277,6 +1316,7 @@ class App:
         self.commander_window = CommanderWindow(self)
         self.fader_window = FaderWindow(self)
         self.layers_window = LayersWindow(self) 
+        self.master_window = MasterWindow(self)
         self.windows: List[Window] = [
             self.universes_window,
             self.patch_window,
@@ -1285,12 +1325,14 @@ class App:
             self.commander_window,
             self.fader_window,
             self.layers_window,
+            self.master_window,
             ImguiAboutWindow(),
         ]
         self.universes: List[DMXUniverse] = []
         self.selected_fixtures: List[ActiveFixture] = []
         self.num_electrics: int = 4
         self.channel_type: ChannelType = ChannelType.INTENSITY
+        self.active_layer_name: str = "manual"
 
     def get_show_layer(self, name: str) -> Optional[ShowLayer]:
         """Finds a global ShowLayer by its name."""
@@ -1344,35 +1386,38 @@ class App:
             if imgui.begin_menu("View"):
                 for window in self.windows:
                     changed, _ = imgui.menu_item(window.title, selected=window.is_open)
-
                     if changed:
                         window.is_open = not window.is_open
-
                 imgui.end_menu()
+
             if imgui.begin_menu("Stageview"):
                 imgui.text("Electrics")
                 imgui.separator()
                 for i in range(1, 9):
-                    changed, _ = imgui.menu_item(
-                        f"{i}", selected=(self.num_electrics == i)
-                    )
+                    changed, _ = imgui.menu_item(f"{i}", selected=(self.num_electrics == i))
                     if changed:
                         self.num_electrics = i
                 imgui.separator()
                 changed, _ = imgui.menu_item("None", selected=(self.num_electrics == 0))
                 if changed:
                     self.num_electrics = 0
-
                 imgui.end_menu()
-            if imgui.begin_menu(f"Channel: {self.channel_type.name.replace("_", " ").title()}"):
+
+            if imgui.begin_menu(f"Layer: {self.active_layer_name}"):
+                for show_layer in self.layers:
+                    changed, _ = imgui.menu_item(show_layer.name, selected=(self.active_layer_name == show_layer.name))
+                    if changed:
+                        self.active_layer_name = show_layer.name
+                imgui.end_menu()
+                
+            if imgui.begin_menu(f"Channel: {self.channel_type.name.replace('_', ' ').title()}"):
                 for channel_type in ChannelType:
                     pretty_name = channel_type.name.replace("_", " ").title()
-                    changed, _ = imgui.menu_item(
-                        pretty_name, selected=(self.channel_type == channel_type)
-                    )
+                    changed, _ = imgui.menu_item(pretty_name, selected=(self.channel_type == channel_type))
                     if changed:
                         self.channel_type = channel_type
                 imgui.end_menu()
+
             imgui.end_main_menu_bar()
 
     def remove_window(self, window: int | Window) -> Window | None:
