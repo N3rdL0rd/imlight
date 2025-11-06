@@ -8,6 +8,7 @@ dependencies = [
     "glfw>=2.10.0",
     "jedi>=0.19.2",
     "numpy>=2.3.4",
+    "ola",
     "pillow>=12.0.0",
     "pyopengl>=3.1.10",
     "requests>=2.32.5",
@@ -16,6 +17,9 @@ dependencies = [
 
 [tool.uv]
 package = true
+
+[tool.uv.sources]
+ola = { git = "https://github.com/N3rdL0rd/ola-py" }
 
 [dependency-groups]
 dev = [

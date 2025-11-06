@@ -85,6 +85,7 @@ dependencies = [
     { name = "glfw" },
     { name = "jedi" },
     { name = "numpy" },
+    { name = "ola" },
     { name = "pillow" },
     { name = "pyopengl" },
     { name = "requests" },
@@ -102,6 +103,7 @@ requires-dist = [
     { name = "glfw", specifier = ">=2.10.0" },
     { name = "jedi", specifier = ">=0.19.2" },
     { name = "numpy", specifier = ">=2.3.4" },
+    { name = "ola", git = "https://github.com/N3rdL0rd/ola-py" },
     { name = "pillow", specifier = ">=12.0.0" },
     { name = "pyopengl", specifier = ">=3.1.10" },
     { name = "requests", specifier = ">=2.32.5" },
@@ -214,6 +216,14 @@ wheels = [
 ]
 
 [[package]]
+name = "ola"
+version = "0.1.0"
+source = { git = "https://github.com/N3rdL0rd/ola-py#bbd8425d1c6525063f40698559618430afea41be" }
+dependencies = [
+    { name = "protobuf" },
+]
+
+[[package]]
 name = "parso"
 version = "0.8.5"
 source = { registry = "https://pypi.org/simple" }
@@ -287,6 +297,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/a2/2f/16cabcc6426c32218ace36bf0d55955e813f2958afddbf1d391849fee9d1/pillow-12.0.0-cp314-cp314t-win32.whl", hash = "sha256:3830c769decf88f1289680a59d4f4c46c72573446352e2befec9a8512104fa52", size = 6408045, upload-time = "2025-10-15T18:23:53.177Z" },
     { url = "https://files.pythonhosted.org/packages/35/73/e29aa0c9c666cf787628d3f0dcf379f4791fba79f4936d02f8b37165bdf8/pillow-12.0.0-cp314-cp314t-win_amd64.whl", hash = "sha256:905b0365b210c73afb0ebe9101a32572152dfd1c144c7e28968a331b9217b94a", size = 7148282, upload-time = "2025-10-15T18:23:55.316Z" },
     { url = "https://files.pythonhosted.org/packages/c1/70/6b41bdcddf541b437bbb9f47f94d2db5d9ddef6c37ccab8c9107743748a4/pillow-12.0.0-cp314-cp314t-win_arm64.whl", hash = "sha256:99353a06902c2e43b43e8ff74ee65a7d90307d82370604746738a1e0661ccca7", size = 2525630, upload-time = "2025-10-15T18:23:57.149Z" },
+]
+
+[[package]]
+name = "protobuf"
+version = "3.20.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/55/5b/e3d951e34f8356e5feecacd12a8e3b258a1da6d9a03ad1770f28925f29bc/protobuf-3.20.3.tar.gz", hash = "sha256:2e3427429c9cffebf259491be0af70189607f365c2f41c7c3764af6f337105f2", size = 216768, upload-time = "2022-09-29T22:39:47.592Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8d/14/619e24a4c70df2901e1f4dbc50a6291eb63a759172558df326347dce1f0d/protobuf-3.20.3-py2.py3-none-any.whl", hash = "sha256:a7ca6d488aa8ff7f329d4c545b2dbad8ac31464f1d8b1c87ad1346717731e4db", size = 162128, upload-time = "2022-09-29T22:39:44.547Z" },
 ]
 
 [[package]]

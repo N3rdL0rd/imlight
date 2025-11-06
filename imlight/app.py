@@ -4,17 +4,26 @@ from slimgui.integrations.glfw import GlfwRenderer
 from typing import Callable, List, Any, Optional, Tuple
 from slimgui import imgui
 
-from .fixture import ActiveFixture, ChannelType, DMXUniverse, DRIVERS, Layer, ShowLayer
+from .fixture import ActiveFixture, ChannelType, ConfigParameterType, DMXUniverse, DRIVERS, DriverInitError, Layer, ShowLayer
 from .fixture.all import ALL_FIXTURES
 from .window import TexturedWindow, Window, ImguiAboutWindow
 
 
 class UniversesWindow(Window):
+    """
+    Manages the creation, configuration, and deletion of DMX universes and their drivers.
+    Includes UI for handling driver initialization errors.
+    """
     def __init__(self, app: "App"):
         super().__init__("Universes")
         self.app = app
         self.drivers = [driver.clean_name for driver in DRIVERS]
         self.drivers.append("None")
+
+        self.configuring_driver_index: Optional[int] = None
+        self.temp_config: dict = {}
+
+        self.driver_init_error: Optional[str] = None
 
     def pre_draw(self):
         imgui.set_next_window_size((560, 130), imgui.Cond.FIRST_USE_EVER)
@@ -23,45 +32,58 @@ class UniversesWindow(Window):
     def draw_content(self):
         if imgui.button("Add New Universe"):
             self.app.universes.append(DMXUniverse())
-
         imgui.separator()
+        
+        if self.driver_init_error is not None:
+            imgui.text_colored((1, 0, 0, 1), self.driver_init_error)
 
         if imgui.begin_table("universes", 4, flags=imgui.TableFlags.BORDERS):
-            imgui.table_setup_column("ID")
-            imgui.table_setup_column("Driver")
-            imgui.table_setup_column("Fixtures")
-            imgui.table_setup_column("Actions")
+            imgui.table_setup_column("ID", flags=imgui.TableColumnFlags.WIDTH_FIXED, init_width_or_weight=30)
+            imgui.table_setup_column("Driver", flags=imgui.TableColumnFlags.WIDTH_STRETCH)
+            imgui.table_setup_column("Fixtures", flags=imgui.TableColumnFlags.WIDTH_FIXED, init_width_or_weight=60)
+            imgui.table_setup_column("Actions", flags=imgui.TableColumnFlags.WIDTH_FIXED, init_width_or_weight=150)
             imgui.table_headers_row()
 
             universe_to_remove_index = None
-
             for i, universe in enumerate(self.app.universes):
                 imgui.table_next_row()
-
                 imgui.table_next_column()
                 imgui.text(str(i))
 
                 imgui.table_next_column()
                 selected_idx = self.drivers.index(
-                    "None"
-                    if universe.driver is None
-                    else universe.driver.__class__.clean_name
+                    "None" if universe.driver is None else universe.driver.__class__.clean_name
                 )
-                changed, new_idx = imgui.combo(
-                    f"##driver_combo_{i}", selected_idx, self.drivers
-                )
+                imgui.push_item_width(-1)
+                changed, new_idx = imgui.combo(f"##driver_combo_{i}", selected_idx, self.drivers)
+                imgui.pop_item_width()
+                
                 if changed:
                     if self.drivers[new_idx] == "None":
                         universe.driver = None
                     else:
-                        universe.driver = DRIVERS[new_idx]()
-
+                        try:
+                            driver_class = DRIVERS[new_idx]
+                            new_driver = driver_class()
+                            new_driver.on_config_changed()
+                            universe.driver = new_driver
+                            self.driver_init_error = None
+                        except DriverInitError as e:
+                            universe.driver = None
+                            self.driver_init_error = str(e)
+                            print(f"error: {e}")
+                            
                 imgui.table_next_column()
                 imgui.text(str(len(universe.fixtures)))
 
                 imgui.table_next_column()
+                if universe.driver and universe.driver.CONFIG_PARAMS:
+                    if imgui.button(f"Configure##{i}"):
+                        self.configuring_driver_index = i
+                        self.temp_config = universe.driver.config.copy()
+                        imgui.open_popup("Driver Configuration")
+                    imgui.same_line()
 
-                # TODO: add button to configure driver
                 if imgui.button(f"Remove##{i}"):
                     universe_to_remove_index = i
 
@@ -70,12 +92,90 @@ class UniversesWindow(Window):
             if universe_to_remove_index is not None:
                 removed_universe = self.app.universes.pop(universe_to_remove_index)
                 fixtures_to_deselect = [
-                    f
-                    for f in self.app.selected_fixtures
-                    if f in removed_universe.fixtures
+                    f for f in self.app.selected_fixtures if f in removed_universe.fixtures
                 ]
                 for f in fixtures_to_deselect:
                     self.app.selected_fixtures.remove(f)
+
+        self._draw_config_popup()
+        self._draw_driver_error_popup()
+
+    def _draw_config_popup(self):
+        """Draws a modal popup to configure a selected DMX driver."""
+        if imgui.begin_popup_modal("Driver Configuration", True, flags=imgui.WindowFlags.ALWAYS_AUTO_RESIZE)[0]:
+            if self.configuring_driver_index is not None:
+                try:
+                    driver = self.app.universes[self.configuring_driver_index].driver
+                    if driver:
+                        imgui.text(f"Settings for {driver.clean_name} Driver")
+                        imgui.separator()
+
+                        for param in driver.CONFIG_PARAMS:
+                            current_val = self.temp_config.get(param.name, param.default_value)
+
+                            if param.param_type == ConfigParameterType.INT:
+                                assert param.constraints is not None
+                                changed, new_val = imgui.slider_int(
+                                    param.name.replace("_", " ").title(),
+                                    current_val,
+                                    v_min=param.constraints.get('min', 0),
+                                    v_max=param.constraints.get('max', 255)
+                                )
+                                if changed:
+                                    self.temp_config[param.name] = new_val
+                            
+                            elif param.param_type == ConfigParameterType.STRING:
+                                changed, new_val = imgui.input_text(
+                                    param.name.replace("_", " ").title(),
+                                    current_val,
+                                )
+                                if changed:
+                                    self.temp_config[param.name] = new_val
+                            
+                            elif param.param_type == ConfigParameterType.BOOL:
+                                changed, new_val = imgui.checkbox(
+                                    param.name.replace("_", " ").title(),
+                                    current_val
+                                )
+                                if changed:
+                                    self.temp_config[param.name] = new_val
+                            
+                            if param.description and imgui.is_item_hovered():
+                                imgui.set_tooltip(param.description)
+
+                        imgui.separator()
+                        if imgui.button("Save"):
+                            driver.config = self.temp_config.copy()
+                            driver.on_config_changed()
+                            imgui.close_current_popup()
+                            self.configuring_driver_index = None
+                        imgui.same_line()
+                        if imgui.button("Cancel"):
+                            imgui.close_current_popup()
+                            self.configuring_driver_index = None
+                except (IndexError, AttributeError):
+                    imgui.close_current_popup()
+                    self.configuring_driver_index = None
+            else:
+                imgui.close_current_popup()
+            imgui.end_popup()
+
+    def _draw_driver_error_popup(self):
+        """Draws a modal popup to display a driver initialization error."""
+        if imgui.begin_popup_modal("Driver Error", True, flags=imgui.WindowFlags.ALWAYS_AUTO_RESIZE)[0]:
+            if self.driver_init_error:
+                imgui.text("Could not initialize DMX driver.")
+                imgui.separator()
+                imgui.begin_child("error_details", size=(400, 50), child_flags=imgui.ChildFlags.BORDERS)
+                imgui.text_wrapped(self.driver_init_error)
+                imgui.end_child()
+                imgui.separator()
+
+            if imgui.button("OK"):
+                imgui.close_current_popup()
+                self.driver_init_error = None
+            
+            imgui.end_popup()
 
 
 class PatchWindow(Window):

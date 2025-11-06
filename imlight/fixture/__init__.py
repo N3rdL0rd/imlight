@@ -3,6 +3,9 @@ from abc import ABC, abstractmethod
 from collections import OrderedDict
 from enum import Enum, auto
 from dataclasses import dataclass, field
+import threading
+from ola.ClientWrapper import ClientWrapper
+from ola.OlaClient import OLADNotRunningException
 from typing import Any, Dict, List, Optional, Tuple, Type
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type
 import numpy as np
@@ -236,20 +239,53 @@ class ActiveFixture:
         )
 
 
+class DriverError(Exception):
+    """Base class for all driver-related errors."""
+    pass
+
+class DriverInitError(DriverError):
+    """Raised when a DMX driver fails to initialize."""
+    pass
+
+class ConfigParameterType(Enum):
+    """Defines the type of a configuration parameter for UI generation."""
+    INT = auto()
+    STRING = auto()
+    BOOL = auto()
+
+@dataclass
+class ConfigParameter:
+    """Defines the schema for a single configuration option for a DMXDriver."""
+    name: str
+    param_type: ConfigParameterType
+    default_value: Any
+    description: Optional[str] = None
+    constraints: Optional[dict] = field(default_factory=dict)
+
+
 class DMXDriver(ABC):
     """
-    Class to represent a backend device driving output from a `DMXUniverse`.
+    Abstract base class for a DMX output driver.
     """
-
     clean_name: str = "Generic (override me!)"
+    CONFIG_PARAMS: List[ConfigParameter] = []
 
-    @abstractmethod
-    def update(self, rendered: np.ndarray):
+    def __init__(self):
+        """Initializes the driver's config with default values from its schema."""
+        self.config = {
+            param.name: param.default_value for param in self.CONFIG_PARAMS
+        }
+
+    def on_config_changed(self):
         """
-        Updates and writes out to the backend of this diver.
+        Optional hook called by the UI after self.config has been updated.
+        Drivers can use this to re-initialize if necessary.
         """
         pass
 
+    @abstractmethod
+    def update(self, rendered: np.ndarray):
+        pass
 
 class DebugDMXDriver(DMXDriver):
     clean_name: str = "Debug"
@@ -258,7 +294,148 @@ class DebugDMXDriver(DMXDriver):
         print(rendered)
 
 
-DRIVERS: List[Type[DMXDriver]] = [DebugDMXDriver]
+TICK_INTERVAL = 25  # in milliseconds (for 40fps)
+
+class OlaDMXDriver(DMXDriver):
+    """
+    A DMX driver that sends data to a universe via the OLA daemon (olad).
+    """
+    clean_name: str = "OLA"
+    CONFIG_PARAMS: List[ConfigParameter] = [
+        ConfigParameter(
+            name="universe",
+            param_type=ConfigParameterType.INT,
+            default_value=1,
+            description="The OLA universe number to output to (1-indexed).",
+            constraints={'min': 1, 'max': 65535}
+        )
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self._dmx_data = np.zeros(512, dtype=np.uint8)
+        self._lock = threading.Lock()
+        self._wrapper: Optional[ClientWrapper] = None
+        self._thread: Optional[threading.Thread] = None
+
+    def _ola_tick(self) -> bool:
+        """
+        Periodically called from the OLA thread to send the latest DMX data.
+        """
+        with self._lock:
+            data_to_send = self._dmx_data.tolist()
+            current_universe = self.config.get("universe", 1)
+
+        if self._wrapper:
+            self._wrapper.Client().SendDmx(current_universe, data_to_send, self._send_callback)
+        
+        return True
+
+    @staticmethod
+    def _send_callback(status):
+        """
+        Callback from OLA to report the status of the DMX send operation.
+        """
+        if not status.Succeeded():
+            print(f"Error sending DMX to OLA: {status.message}")
+
+    def on_config_changed(self):
+        """
+        (Re)starts the OLA client and its background thread.
+        This method is designed to be called after __init__ or when config changes.
+        """
+        if self._wrapper:
+            self._wrapper.Stop()
+            if self._thread and self._thread.is_alive():
+                self._thread.join()
+        
+        try:
+            self._wrapper = ClientWrapper()
+        except OLADNotRunningException:
+            raise DriverInitError("Failed to connect to OLA daemon (olad). Please ensure it is running.")
+
+        self._thread = threading.Thread(target=self._wrapper.Run)
+        self._thread.daemon = True
+        self._thread.start()
+        self._wrapper.AddEvent(TICK_INTERVAL, self._ola_tick)
+
+    def update(self, rendered: np.ndarray):
+        """
+        Called from the main application thread to provide the latest DMX frame.
+        """
+        with self._lock:
+            np.copyto(self._dmx_data, rendered)
+            
+
+class FileLogDMXDriver(DMXDriver):
+    """
+    A test driver that logs DMX frames to a file.
+    """
+    clean_name: str = "File Logger"
+    CONFIG_PARAMS: List[ConfigParameter] = [
+        ConfigParameter(
+            name="enabled",
+            param_type=ConfigParameterType.BOOL,
+            default_value=True,
+            description="Enable or disable logging."
+        ),
+        ConfigParameter(
+            name="filename",
+            param_type=ConfigParameterType.STRING,
+            default_value="dmx_log.txt",
+            description="The path to the file where DMX frames will be logged."
+        ),
+        ConfigParameter(
+            name="log_interval",
+            param_type=ConfigParameterType.INT,
+            default_value=1,
+            description="Log only every Nth frame to reduce file size.",
+            constraints={'min': 1, 'max': 100}
+        )
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self._frame_count: int = 0
+        self._file_handle: Optional[Any] = None
+        self.on_config_changed()
+
+    def on_config_changed(self):
+        """Called when config is saved. Re-opens the log file with the new name."""
+        # Close the existing file handle if it's open
+        if self._file_handle:
+            self._file_handle.close()
+            self._file_handle = None
+        
+        # Open the new file in append mode
+        try:
+            filename = self.config.get("filename", "dmx_log.txt")
+            if filename: # Ensure filename is not empty
+                self._file_handle = open(filename, "a")
+                print(f"File logger now writing to {filename}")
+        except IOError as e:
+            print(f"Error opening log file: {e}")
+            self._file_handle = None
+
+    def update(self, rendered: np.ndarray):
+        """Writes the DMX frame to the file if conditions are met."""
+        if not self.config.get("enabled", False) or not self._file_handle:
+            return
+
+        self._frame_count += 1
+        if self._frame_count % self.config.get("log_interval", 1) == 0:
+            active_channels = [f"{i+1}:{val}" for i, val in enumerate(rendered) if val > 0]
+            log_line = f"Frame {self._frame_count}: " + ", ".join(active_channels) + "\n"
+            self._file_handle.write(log_line)
+            self._file_handle.flush() # Ensure it's written immediately
+
+    def __del__(self):
+        """Ensure the file is closed when the driver is destroyed."""
+        if self._file_handle:
+            self._file_handle.close()
+
+
+DRIVERS: List[Type[DMXDriver]] = [OlaDMXDriver, FileLogDMXDriver, DebugDMXDriver]
 
 
 class DMXUniverse:
