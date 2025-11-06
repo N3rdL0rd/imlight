@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, auto
 from slimgui.integrations.glfw import GlfwRenderer
 from typing import Callable, List, Any, Optional, Tuple
 from slimgui import imgui
@@ -1250,21 +1250,51 @@ class FaderWindow(Window):
         imgui.columns(1)
         
 class MasterWindow(Window):
-    """A window with a single master fader for the current selection or all fixtures."""
+    """
+    A window with a single master fader for the current selection or all fixtures,
+    with switchable vertical and horizontal modes.
+    """
+    
+    class Mode(Enum):
+        VERTICAL = auto()
+        HORIZONTAL = auto()
+    
     def __init__(self, app: "App"):
         super().__init__("Master")
         self.app = app
         self.is_open = True
         self.master_level: int = 255
+        self.mode: MasterWindow.Mode = MasterWindow.Mode.VERTICAL
 
+        self.window_flags |= imgui.WindowFlags.MENU_BAR
         self.window_flags |= imgui.WindowFlags.NO_SCROLLBAR
         self.window_flags |= imgui.WindowFlags.NO_COLLAPSE
 
+    def _draw_menu_bar(self):
+        """Draws the menu bar for switching modes."""
+        if imgui.begin_menu_bar():
+            if imgui.begin_menu("Mode"):
+                v_changed, _ = imgui.menu_item("Vertical", selected=(self.mode == self.Mode.VERTICAL))
+                if v_changed:
+                    self.mode = self.Mode.VERTICAL
+
+                h_changed, _ = imgui.menu_item("Horizontal", selected=(self.mode == self.Mode.HORIZONTAL))
+                if h_changed:
+                    self.mode = self.Mode.HORIZONTAL
+                imgui.end_menu()
+            imgui.end_menu_bar()
+
     def pre_draw(self):
-        imgui.set_next_window_size((80, 250), imgui.Cond.FIRST_USE_EVER)
+        """Sets a different default size for each mode on first use."""
+        if self.mode == self.Mode.VERTICAL:
+            imgui.set_next_window_size((80, 250), imgui.Cond.FIRST_USE_EVER)
+        else:
+            imgui.set_next_window_size((250, 90), imgui.Cond.FIRST_USE_EVER)
         imgui.set_next_window_pos((10, 850), imgui.Cond.FIRST_USE_EVER)
 
     def draw_content(self):
+        self._draw_menu_bar()
+
         target_fixtures = self.app.selected_fixtures
         if not target_fixtures:
             all_fixtures = []
@@ -1272,24 +1302,51 @@ class MasterWindow(Window):
                 all_fixtures.extend(u.fixtures)
             target_fixtures = all_fixtures
 
-        avail_width = imgui.get_content_region_avail()[0]
-        slider_width = 30
-        imgui.set_cursor_pos_x((avail_width - slider_width) * 0.5)
+        changed = False
+        new_level = self.master_level
 
-        slider_height = imgui.get_content_region_avail()[1] - 30
-        changed, new_level = imgui.vslider_int(
-            "##master_fader",
-            (slider_width, slider_height),
-            self.master_level,
-            0,
-            255,
-            format=""
-        )
+        if self.mode == self.Mode.VERTICAL:
+            avail_width = imgui.get_content_region_avail()[0]
+            slider_width = 30
+            imgui.set_cursor_pos_x((avail_width - slider_width) * 0.5)
 
-        level_text = f"{self.master_level}"
-        text_width = imgui.calc_text_size(level_text)[0]
-        imgui.set_cursor_pos_x((avail_width - text_width) * 0.5)
-        imgui.text(level_text)
+            slider_height = imgui.get_content_region_avail()[1] - 30
+            changed, new_level = imgui.vslider_int(
+                "##master_fader_v",
+                (slider_width, slider_height),
+                self.master_level,
+                0,
+                255,
+                format=""
+            )
+
+            level_text = f"{self.master_level}"
+            text_width = imgui.calc_text_size(level_text)[0]
+            imgui.set_cursor_pos_x((avail_width - text_width) * 0.5)
+            imgui.text(level_text)
+
+        elif self.mode == self.Mode.HORIZONTAL:
+            avail_width = imgui.get_content_region_avail()[0]
+            avail_height = imgui.get_content_region_avail()[1]
+
+            slider_height = 20
+            content_height = slider_height + 20
+            imgui.set_cursor_pos_y(imgui.get_cursor_pos_y() + (avail_height - content_height) * 0.5)
+            imgui.push_item_width(avail_width * 0.9)
+            imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + (avail_width * 0.05))
+
+            changed, new_level = imgui.slider_int(
+                "##master_fader_h",
+                self.master_level,
+                0,
+                255
+            )
+            imgui.pop_item_width()
+
+            level_text = f"{self.master_level}"
+            text_width = imgui.calc_text_size(level_text)[0]
+            imgui.set_cursor_pos_x((avail_width - text_width) * 0.5)
+            imgui.text(level_text)
 
         if changed:
             self.master_level = new_level
@@ -1401,6 +1458,19 @@ class App:
                 changed, _ = imgui.menu_item("None", selected=(self.num_electrics == 0))
                 if changed:
                     self.num_electrics = 0
+                imgui.end_menu()
+                
+            if imgui.begin_menu("Clear"):
+                for show_layer in self.layers:
+                    changed, _ = imgui.menu_item(show_layer.name)
+                    if changed:
+                        for universe in self.universes:
+                            for fixture in universe.fixtures:
+                                layer_to_clear = fixture.layers[show_layer.name]
+                                
+                                layer_to_clear.dmx_values.fill(0)
+                                
+                                fixture.compose()
                 imgui.end_menu()
 
             if imgui.begin_menu(f"Layer: {self.active_layer_name}"):

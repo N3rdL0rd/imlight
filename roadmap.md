@@ -6,7 +6,7 @@
 - [x] Python scripting API, REPL window (or other CLI with shorthand), ability to run code inline (or an editor of sorts)
 - [ ] Scroll to change selected channel type across selection
 - [ ] Internal IDs separate from DMX IDs/universe for better mapping
-- [ ] `Display` tab on top menu to change rendered ID (DMX or internal ID)
+  - [ ] `Display` tab on top menu to change rendered ID (DMX or internal ID)
 - [ ] Manual control layer, cue playback layer, cue control (saving and playing cues), manual control (faders)
 - [ ] Integrate with cue scripting system from before
 - [ ] Save and load state to a showfile
@@ -26,3 +26,4 @@
 - [ ] Relative master mode or wheel
 - [ ] Inventory tracker
 - [ ] Printable stage maps and installation diagrams
+- [ ] OSC support
