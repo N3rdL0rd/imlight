@@ -1,58 +1,35 @@
 # viz.py
 
 from __future__ import annotations
-
 import glfw
 import moderngl
 import numpy as np
 from stl import mesh
-import math
 from slimgui import imgui
-import pyrr  # <-- Use the full pyrr library for explicit function calls
+from pyrr import Matrix44
 from typing import TYPE_CHECKING
-
 from .window import Window
 
 if TYPE_CHECKING:
     from .app import App
 
-# Shaders remain the same
+# --- 1. The Simplest Shaders ---
+# Vertex shader just transforms the vertex position.
 vert = """
     #version 330
-    uniform mat4 M; uniform mat4 V; uniform mat4 P;
-    in vec3 in_vert; in vec3 in_normal;
-    out vec3 v_normal_view; out vec3 v_pos_view;
-
+    uniform mat4 Mvp;
+    in vec3 in_vert;
     void main() {
-        vec4 pos_world = M * vec4(in_vert, 1.0);
-        vec4 pos_view = V * pos_world;
-        v_pos_view = pos_view.xyz;
-        v_normal_view = mat3(transpose(inverse(V * M))) * in_normal;
-        gl_Position = P * pos_view;
+        gl_Position = Mvp * vec4(in_vert, 1.0);
     }
 """
 
+# Fragment shader outputs a single, hardcoded color.
 frag = """
     #version 330
-    uniform vec3 LightDirView; uniform vec4 ObjectColor;
-    in vec3 v_normal_view; in vec3 v_pos_view;
     out vec4 f_color;
-
     void main() {
-        float ambient_strength = 0.3; float diffuse_strength = 0.7;
-        float specular_strength = 0.5; float shininess = 32.0;
-
-        vec3 N = normalize(v_normal_view); vec3 L = normalize(LightDirView);
-        vec3 E = normalize(-v_pos_view); vec3 H = normalize(L + E);
-
-        vec3 ambient = ambient_strength * ObjectColor.rgb;
-        float diff = max(dot(N, L), 0.0);
-        vec3 diffuse = diffuse_strength * diff * ObjectColor.rgb;
-        float spec = pow(max(dot(N, H), 0.0), shininess);
-        vec3 specular = specular_strength * spec * vec3(1.0, 1.0, 1.0);
-
-        vec3 final_color = ambient + diffuse + specular;
-        f_color = vec4(final_color, ObjectColor.a);
+        f_color = vec4(0.8, 0.2, 0.2, 1.0);
     }
 """
 
@@ -63,57 +40,46 @@ class VizWindow(Window):
         self.ctx = ctx
         self.is_open = True
 
-        self.camera_distance = 2.5
-        self.camera_phi = math.radians(20)
-        self.camera_theta = math.radians(70)
-        self.camera_target = pyrr.Vector3([0.0, 0.0, 0.0])
-
+        # --- 2. Setup a Simple Program and Uniform ---
         self.prog = self.ctx.program(vertex_shader=vert, fragment_shader=frag)
-        self.uniform_M = self.prog['M']
-        self.uniform_V = self.prog['V']
-        self.uniform_P = self.prog['P']
-        self.uniform_light_dir = self.prog['LightDirView']
-        self.uniform_object_color = self.prog['ObjectColor']
+        self.mvp_uniform = self.prog['Mvp']
 
-        self.vao, self.model_matrix = self._load_model_from_stl('teapot.stl')
+        # --- 3. Load the Model ---
+        self.vao = self._load_model_from_stl('teapot.stl')
 
+        # Framebuffer for off-screen rendering
         self.fbo = None
         self._fbo_size = (0, 0)
-    
+
     def _load_model_from_stl(self, filename: str):
+        """
+        The simplest way to load an STL.
+        Just grabs the vertices and sends them to the GPU.
+        """
         try:
             mesh_data = mesh.Mesh.from_file(filename)
-            _, cog, _ = mesh_data.get_mass_properties()
-            self.camera_target = pyrr.Vector3(cog)
-            
-            scale = (mesh_data.max_ - mesh_data.min_).max()
-            
-            # Use explicit pyrr functions for matrix creation
-            scale_matrix = pyrr.matrix44.create_from_scale([1.0 / scale] * 3)
-            translate_matrix = pyrr.matrix44.create_from_translation(-self.camera_target)
-            model_matrix = pyrr.matrix44.multiply(scale_matrix, translate_matrix)
 
-            normals = mesh_data.normals
-            vertices = mesh_data.vectors
-            flat_normals = np.repeat(normals, 3, axis=0)
-            flat_vertices = vertices.reshape(-1, 3)
-            interleaved_data = np.hstack([flat_normals, flat_vertices]).astype('f4')
+            # The STL's 'vectors' are triangles. We reshape them into a flat
+            # list of vertices. This is all the data we need.
+            vertices = mesh_data.vectors.reshape(-1, 3).astype('f4')
 
-            vbo = self.ctx.buffer(interleaved_data.tobytes())
-            vao = self.ctx.vertex_array(
-                self.prog,
-                [(vbo, '3f 3f', 'in_normal', 'in_vert')]
-            )
-            return vao, model_matrix
+            # Create a Vertex Buffer Object (VBO) and send the vertex data to it.
+            vbo = self.ctx.buffer(vertices.tobytes())
+
+            # Create a Vertex Array Object (VAO) to describe the VBO's layout.
+            # '3f' means each vertex is made of 3 floating-point numbers.
+            # 'in_vert' is the name of the input in our vertex shader.
+            return self.ctx.vertex_array(self.prog, [(vbo, '3f', 'in_vert')])
 
         except FileNotFoundError:
             print(f"Error: Model file '{filename}' not found.")
-            return self.ctx.vertex_array(self.prog, []), pyrr.matrix44.create_identity()
+            return self.ctx.vertex_array(self.prog, []) # Return an empty VAO
         except Exception as e:
-            print(f"Error loading model: {e}")
-            return self.ctx.vertex_array(self.prog, []), pyrr.matrix44.create_identity()
+            print(f"Error loading STL model: {e}")
+            return self.ctx.vertex_array(self.prog, [])
 
     def _resize_fbo(self, width: float, height: float):
+        """Recreates the framebuffer object if the rendering size changes."""
         width, height = int(width), int(height)
         if width <= 0 or height <= 0 or (self.fbo and self._fbo_size == (width, height)):
             return
@@ -127,29 +93,12 @@ class VizWindow(Window):
             color_attachments=[color_attachment], depth_attachment=depth_attachment
         )
 
-    def _handle_camera_controls(self):
-        io = imgui.get_io()
-        if not imgui.is_item_hovered():
-            return
-
-        scroll = io.mouse_wheel
-        if scroll != 0:
-            self.camera_distance = max(0.5, self.camera_distance - scroll * 0.2)
-
-        if imgui.is_mouse_dragging(imgui.MouseButton.LEFT):
-            delta = io.mouse_delta
-            self.camera_phi -= delta[0] * 0.01
-            self.camera_theta = np.clip(self.camera_theta - delta[1] * 0.01, 0.1, math.pi - 0.1)
-
     def pre_draw(self):
         imgui.set_next_window_pos((580, 30), imgui.Cond.FIRST_USE_EVER)
         imgui.set_next_window_size((780, 480), imgui.Cond.FIRST_USE_EVER)
-        if imgui.is_item_active():
-             self.window_flags |= imgui.WindowFlags.NO_MOVE
-        else:
-             self.window_flags &= ~imgui.WindowFlags.NO_MOVE
 
     def draw_content(self):
+        """Renders the 3D scene to a texture, then draws that texture in the window."""
         content_size = imgui.get_content_region_avail()
         self._resize_fbo(content_size[0], content_size[1])
 
@@ -157,47 +106,51 @@ class VizWindow(Window):
             imgui.text("Could not load 3D model.")
             return
 
+        # --- 4. Render the Scene ---
+        # Activate our off-screen framebuffer
         self.fbo.use()
         self.ctx.clear(0.12, 0.12, 0.12)
-        self.ctx.enable(moderngl.DEPTH_TEST | moderngl.CULL_FACE)
+        self.ctx.enable(moderngl.DEPTH_TEST)
 
-        aspect_ratio = self._fbo_size[0] / self._fbo_size[1] if self._fbo_size[1] > 0 else 1.0
+        # --- Create Fixed Camera Matrices ---
+        aspect_ratio = 1.0
+        if self._fbo_size[1] > 0:
+            aspect_ratio = self._fbo_size[0] / self._fbo_size[1]
 
-        eye_x = self.camera_distance * math.sin(self.camera_theta) * math.cos(self.camera_phi)
-        eye_y = self.camera_distance * math.cos(self.camera_theta)
-        eye_z = self.camera_distance * math.sin(self.camera_theta) * math.sin(self.camera_phi)
-        eye = pyrr.Vector3([eye_x, eye_y, eye_z]) + self.camera_target
+        # A fixed projection matrix
+        proj = Matrix44.perspective_projection(45.0, aspect_ratio, 0.1, 1000.0)
+        # A fixed camera looking at the origin from a distance
+        lookat = Matrix44.look_at(
+            eye=(150, -150, 150), target=(0, 0, 50), up=(0, 0, 1)
+        )
+        # A simple rotation to make it look 3D
+        model = Matrix44.from_z_rotation(glfw.get_time() * 0.5)
 
-        proj_matrix = pyrr.matrix44.create_perspective_projection(45.0, aspect_ratio, 0.1, 100.0)
-        view_matrix = pyrr.matrix44.create_look_at(eye, self.camera_target, pyrr.Vector3([0.0, 1.0, 0.0]))
+        # Combine them into a single Model-View-Projection matrix
+        mvp = proj * lookat * model
         
-        self.uniform_P.write(proj_matrix.astype('f4'))
-        self.uniform_V.write(view_matrix.astype('f4'))
-        self.uniform_M.write(self.model_matrix.astype('f4'))
-        self.uniform_object_color.value = (0.8, 0.2, 0.2, 1.0)
-
-        # --------------------- THE DEFINITIVE FIX IS HERE ---------------------
-        light_dir_world = pyrr.Vector4([2.0, 3.0, 4.0, 0.0])
-        
-        # Use the explicit function to transform the vector by the matrix
-        light_dir_view_vec4 = pyrr.matrix44.apply_to_vector(view_matrix, light_dir_world)
-        
-        # Normalize the resulting vector using the explicit function
-        light_dir_view_normalized = pyrr.vector.normalize(light_dir_view_vec4)
-        # ----------------------------------------------------------------------
-        
-        self.uniform_light_dir.value = tuple(light_dir_view_normalized)
-
+        # --- Send data and render ---
+        self.mvp_uniform.write(mvp.astype('f4'))
         self.vao.render()
 
-        self.ctx.disable(moderngl.DEPTH_TEST | moderngl.CULL_FACE)
+        # --- 5. Display in ImGui ---
+        # Restore OpenGL state for ImGui
+        self.ctx.disable(moderngl.DEPTH_TEST)
         self.ctx.screen.use()
 
+        # Get the OpenGL texture ID from our framebuffer
         texture_id = self.fbo.color_attachments[0].glo
-        imgui.image(texture_id, self._fbo_size, uv0=(0, 1), uv1=(1, 0))
-        self._handle_camera_controls()
+        
+        # Draw the texture as an image in the ImGui window
+        imgui.image(
+            texture_id,
+            self._fbo_size,
+            uv0=(0, 1),
+            uv1=(1, 0),
+        )
 
     def __del__(self):
+        """Clean up ModernGL resources when the window is closed."""
         if self.fbo: self.fbo.release()
         if self.vao: self.vao.release()
         self.prog.release()
