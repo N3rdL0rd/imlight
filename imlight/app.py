@@ -3,6 +3,8 @@ from enum import Enum, auto
 from slimgui.integrations.glfw import GlfwRenderer
 from typing import Callable, List, Any, Optional, Tuple
 from slimgui import imgui
+import moderngl
+from .viz import VizWindow
 
 from .fixture import ActiveFixture, ChannelType, ConfigParameterType, DMXUniverse, DRIVERS, DriverInitError, Layer, ShowLayer
 from .fixture.all import ALL_FIXTURES
@@ -1197,7 +1199,7 @@ class LayersWindow(Window):
 
     def pre_draw(self):
         imgui.set_next_window_size((400, 300), imgui.Cond.FIRST_USE_EVER)
-        imgui.set_next_window_pos((1370, 820), imgui.Cond.FIRST_USE_EVER)
+        imgui.set_next_window_pos((1460, 820), imgui.Cond.FIRST_USE_EVER)
 
     def draw_content(self):
         imgui.text("Add New Global Layer")
@@ -1373,7 +1375,7 @@ class MasterWindow(Window):
     def _draw_menu_bar(self):
         """Draws the menu bar for switching modes."""
         if imgui.begin_menu_bar():
-            if imgui.begin_menu("Mode"):
+            if imgui.begin_menu("Layout"):
                 v_changed, _ = imgui.menu_item("Vertical", selected=(self.mode == self.Mode.VERTICAL))
                 if v_changed:
                     self.mode = self.Mode.VERTICAL
@@ -1386,11 +1388,8 @@ class MasterWindow(Window):
 
     def pre_draw(self):
         """Sets a different default size for each mode on first use."""
-        if self.mode == self.Mode.VERTICAL:
-            imgui.set_next_window_size((80, 250), imgui.Cond.FIRST_USE_EVER)
-        else:
-            imgui.set_next_window_size((250, 90), imgui.Cond.FIRST_USE_EVER)
-        imgui.set_next_window_pos((10, 850), imgui.Cond.FIRST_USE_EVER)
+        imgui.set_next_window_size((80, 340), imgui.Cond.FIRST_USE_EVER) # default is vertical, so we assume this
+        imgui.set_next_window_pos((1370, 820), imgui.Cond.FIRST_USE_EVER)
 
     def draw_content(self):
         self._draw_menu_bar()
@@ -1457,9 +1456,10 @@ class MasterWindow(Window):
 
 
 class App:
-    def __init__(self, window: Any, renderer: GlfwRenderer):
+    def __init__(self, window: Any, renderer: GlfwRenderer, ctx: moderngl.Context):
         self.window = window
         self.renderer = renderer
+        self.ctx = ctx
         self.layers: List[ShowLayer] = [
             ShowLayer("manual", 1.0),
             ShowLayer("effects", 1.0),
@@ -1474,6 +1474,7 @@ class App:
         self.fader_window = FaderWindow(self)
         self.layers_window = LayersWindow(self) 
         self.master_window = MasterWindow(self)
+        self.viz_window = VizWindow(self, self.ctx)
         self.windows: List[Window] = [
             self.universes_window,
             self.patch_window,
@@ -1483,6 +1484,7 @@ class App:
             self.fader_window,
             self.layers_window,
             self.master_window,
+            self.viz_window,
             ImguiAboutWindow(),
         ]
         self.universes: List[DMXUniverse] = []

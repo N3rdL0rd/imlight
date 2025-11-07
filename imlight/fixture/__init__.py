@@ -4,11 +4,14 @@ from collections import OrderedDict
 from enum import Enum, auto
 from dataclasses import dataclass, field
 import threading
-from ola.ClientWrapper import ClientWrapper
-from ola.OlaClient import OLADNotRunningException
 from typing import Any, Dict, List, Optional, Tuple, Type
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type
 import numpy as np
+import os
+
+if os.name != "nt":
+    from ola.ClientWrapper import ClientWrapper
+    from ola.OlaClient import OLADNotRunningException
 
 if TYPE_CHECKING:
     from ..app import App
@@ -296,76 +299,77 @@ class DebugDMXDriver(DMXDriver):
 
 TICK_INTERVAL = 25  # in milliseconds (for 40fps)
 
-class OlaDMXDriver(DMXDriver):
-    """
-    A DMX driver that sends data to a universe via the OLA daemon (olad).
-    """
-    clean_name: str = "OLA"
-    CONFIG_PARAMS: List[ConfigParameter] = [
-        ConfigParameter(
-            name="universe",
-            param_type=ConfigParameterType.INT,
-            default_value=1,
-            description="The OLA universe number to output to (1-indexed).",
-            constraints={'min': 1, 'max': 65535}
-        )
-    ]
+if os.name != "nt":
+    class OlaDMXDriver(DMXDriver):
+        """
+        A DMX driver that sends data to a universe via the OLA daemon (olad).
+        """
+        clean_name: str = "OLA"
+        CONFIG_PARAMS: List[ConfigParameter] = [
+            ConfigParameter(
+                name="universe",
+                param_type=ConfigParameterType.INT,
+                default_value=1,
+                description="The OLA universe number to output to (1-indexed).",
+                constraints={'min': 1, 'max': 65535}
+            )
+        ]
 
-    def __init__(self):
-        super().__init__()
-        self._dmx_data = np.zeros(512, dtype=np.uint8)
-        self._lock = threading.Lock()
-        self._wrapper: Optional[ClientWrapper] = None
-        self._thread: Optional[threading.Thread] = None
+        def __init__(self):
+            super().__init__()
+            self._dmx_data = np.zeros(512, dtype=np.uint8)
+            self._lock = threading.Lock()
+            self._wrapper: Optional[ClientWrapper] = None
+            self._thread: Optional[threading.Thread] = None
 
-    def _ola_tick(self) -> bool:
-        """
-        Periodically called from the OLA thread to send the latest DMX data.
-        """
-        with self._lock:
-            data_to_send = self._dmx_data.tolist()
-            current_universe = self.config.get("universe", 1)
+        def _ola_tick(self) -> bool:
+            """
+            Periodically called from the OLA thread to send the latest DMX data.
+            """
+            with self._lock:
+                data_to_send = self._dmx_data.tolist()
+                current_universe = self.config.get("universe", 1)
 
-        if self._wrapper:
-            self._wrapper.Client().SendDmx(current_universe, data_to_send, self._send_callback)
-        
-        return True
-
-    @staticmethod
-    def _send_callback(status):
-        """
-        Callback from OLA to report the status of the DMX send operation.
-        """
-        if not status.Succeeded():
-            print(f"Error sending DMX to OLA: {status.message}")
-
-    def on_config_changed(self):
-        """
-        (Re)starts the OLA client and its background thread.
-        This method is designed to be called after __init__ or when config changes.
-        """
-        if self._wrapper:
-            self._wrapper.Stop()
-            if self._thread and self._thread.is_alive():
-                self._thread.join()
-        
-        try:
-            self._wrapper = ClientWrapper()
-        except OLADNotRunningException:
-            raise DriverInitError("Failed to connect to OLA daemon (olad). Please ensure it is running.")
-
-        self._thread = threading.Thread(target=self._wrapper.Run)
-        self._thread.daemon = True
-        self._thread.start()
-        self._wrapper.AddEvent(TICK_INTERVAL, self._ola_tick)
-
-    def update(self, rendered: np.ndarray):
-        """
-        Called from the main application thread to provide the latest DMX frame.
-        """
-        with self._lock:
-            np.copyto(self._dmx_data, rendered)
+            if self._wrapper:
+                self._wrapper.Client().SendDmx(current_universe, data_to_send, self._send_callback)
             
+            return True
+
+        @staticmethod
+        def _send_callback(status):
+            """
+            Callback from OLA to report the status of the DMX send operation.
+            """
+            if not status.Succeeded():
+                print(f"Error sending DMX to OLA: {status.message}")
+
+        def on_config_changed(self):
+            """
+            (Re)starts the OLA client and its background thread.
+            This method is designed to be called after __init__ or when config changes.
+            """
+            if self._wrapper:
+                self._wrapper.Stop()
+                if self._thread and self._thread.is_alive():
+                    self._thread.join()
+            
+            try:
+                self._wrapper = ClientWrapper()
+            except OLADNotRunningException:
+                raise DriverInitError("Failed to connect to OLA daemon (olad). Please ensure it is running.")
+
+            self._thread = threading.Thread(target=self._wrapper.Run)
+            self._thread.daemon = True
+            self._thread.start()
+            self._wrapper.AddEvent(TICK_INTERVAL, self._ola_tick)
+
+        def update(self, rendered: np.ndarray):
+            """
+            Called from the main application thread to provide the latest DMX frame.
+            """
+            with self._lock:
+                np.copyto(self._dmx_data, rendered)
+                
 
 class FileLogDMXDriver(DMXDriver):
     """
@@ -435,7 +439,10 @@ class FileLogDMXDriver(DMXDriver):
             self._file_handle.close()
 
 
-DRIVERS: List[Type[DMXDriver]] = [OlaDMXDriver, FileLogDMXDriver, DebugDMXDriver]
+DRIVERS: List[Type[DMXDriver]] = [FileLogDMXDriver, DebugDMXDriver]
+
+if os.name != "nt":
+    DRIVERS.insert(-2, OlaDMXDriver)
 
 
 class DMXUniverse:

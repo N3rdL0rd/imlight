@@ -2,6 +2,7 @@ import glfw
 import OpenGL.GL as gl
 from slimgui import imgui
 from slimgui.integrations.glfw import GlfwRenderer
+import moderngl
 
 from .app import App
 
@@ -24,12 +25,13 @@ def main():
     )
     glfw.make_context_current(glfw_window)
 
+    ctx = moderngl.create_context()
     imgui.create_context()
     io = imgui.get_io()
     io.config_flags |= imgui.ConfigFlags.NAV_ENABLE_KEYBOARD
     renderer = GlfwRenderer(glfw_window, prev_key_callback=_key_callback)
 
-    app = App(glfw_window, renderer)
+    app = App(glfw_window, renderer, ctx)
 
     while not (glfw.window_should_close(glfw_window)):
         try:
