@@ -16,6 +16,7 @@ if os.name != "nt":
 if TYPE_CHECKING:
     from ..app import App
 
+
 class ChannelType(Enum):
     """Enum for the logical function of a channel."""
 
@@ -71,6 +72,7 @@ class IconType(Enum):
     SPOT = auto()
     HOUSE = auto()
 
+
 @dataclass(frozen=True)
 class FixtureProfile:
     """The immutable blueprint for a type of lighting fixture."""
@@ -92,6 +94,7 @@ class FixtureProfile:
 @dataclass
 class ShowLayer:
     """Represents a global layer's properties, managed by the App."""
+
     name: str
     priority: float = 1.0
 
@@ -152,7 +155,7 @@ class LayerManager:
 
     def __iter__(self):
         return iter(self._layers.values())
-    
+
     def keys(self):
         return self._layers.keys()
 
@@ -184,7 +187,9 @@ class ActiveFixture:
         self.layers = LayerManager(self)
 
         for show_layer in self.app.layers:
-            self.layers._layers[show_layer.name] = Layer(show_layer.name, self.profile, self)
+            self.layers._layers[show_layer.name] = Layer(
+                show_layer.name, self.profile, self
+            )
 
         self._final_dmx_values = np.zeros(profile.channel_count, dtype=np.uint8)
         self.compose()
@@ -204,7 +209,7 @@ class ActiveFixture:
         for layer in self.layers:
             show_layer = self.app.get_show_layer(layer.name)
             if show_layer is None:
-                continue # Should not happen in normal operation
+                continue  # Should not happen in normal operation
 
             priority = show_layer.priority
             if priority > 0:
@@ -244,21 +249,28 @@ class ActiveFixture:
 
 class DriverError(Exception):
     """Base class for all driver-related errors."""
+
     pass
+
 
 class DriverInitError(DriverError):
     """Raised when a DMX driver fails to initialize."""
+
     pass
+
 
 class ConfigParameterType(Enum):
     """Defines the type of a configuration parameter for UI generation."""
+
     INT = auto()
     STRING = auto()
     BOOL = auto()
 
+
 @dataclass
 class ConfigParameter:
     """Defines the schema for a single configuration option for a DMXDriver."""
+
     name: str
     param_type: ConfigParameterType
     default_value: Any
@@ -270,14 +282,13 @@ class DMXDriver(ABC):
     """
     Abstract base class for a DMX output driver.
     """
+
     clean_name: str = "Generic (override me!)"
     CONFIG_PARAMS: List[ConfigParameter] = []
 
     def __init__(self):
         """Initializes the driver's config with default values from its schema."""
-        self.config = {
-            param.name: param.default_value for param in self.CONFIG_PARAMS
-        }
+        self.config = {param.name: param.default_value for param in self.CONFIG_PARAMS}
 
     def on_config_changed(self):
         """
@@ -290,6 +301,7 @@ class DMXDriver(ABC):
     def update(self, rendered: np.ndarray):
         pass
 
+
 class DebugDMXDriver(DMXDriver):
     clean_name: str = "Debug"
 
@@ -300,10 +312,12 @@ class DebugDMXDriver(DMXDriver):
 TICK_INTERVAL = 25  # in milliseconds (for 40fps)
 
 if os.name != "nt":
+
     class OlaDMXDriver(DMXDriver):
         """
         A DMX driver that sends data to a universe via the OLA daemon (olad).
         """
+
         clean_name: str = "OLA"
         CONFIG_PARAMS: List[ConfigParameter] = [
             ConfigParameter(
@@ -311,7 +325,7 @@ if os.name != "nt":
                 param_type=ConfigParameterType.INT,
                 default_value=1,
                 description="The OLA universe number to output to (1-indexed).",
-                constraints={'min': 1, 'max': 65535}
+                constraints={"min": 1, "max": 65535},
             )
         ]
 
@@ -331,8 +345,10 @@ if os.name != "nt":
                 current_universe = self.config.get("universe", 1)
 
             if self._wrapper:
-                self._wrapper.Client().SendDmx(current_universe, data_to_send, self._send_callback)
-            
+                self._wrapper.Client().SendDmx(
+                    current_universe, data_to_send, self._send_callback
+                )
+
             return True
 
         @staticmethod
@@ -352,11 +368,13 @@ if os.name != "nt":
                 self._wrapper.Stop()
                 if self._thread and self._thread.is_alive():
                     self._thread.join()
-            
+
             try:
                 self._wrapper = ClientWrapper()
             except OLADNotRunningException:
-                raise DriverInitError("Failed to connect to OLA daemon (olad). Please ensure it is running.")
+                raise DriverInitError(
+                    "Failed to connect to OLA daemon (olad). Please ensure it is running."
+                )
 
             self._thread = threading.Thread(target=self._wrapper.Run)
             self._thread.daemon = True
@@ -369,33 +387,34 @@ if os.name != "nt":
             """
             with self._lock:
                 np.copyto(self._dmx_data, rendered)
-                
+
 
 class FileLogDMXDriver(DMXDriver):
     """
     A test driver that logs DMX frames to a file.
     """
+
     clean_name: str = "File Logger"
     CONFIG_PARAMS: List[ConfigParameter] = [
         ConfigParameter(
             name="enabled",
             param_type=ConfigParameterType.BOOL,
             default_value=True,
-            description="Enable or disable logging."
+            description="Enable or disable logging.",
         ),
         ConfigParameter(
             name="filename",
             param_type=ConfigParameterType.STRING,
             default_value="dmx_log.txt",
-            description="The path to the file where DMX frames will be logged."
+            description="The path to the file where DMX frames will be logged.",
         ),
         ConfigParameter(
             name="log_interval",
             param_type=ConfigParameterType.INT,
             default_value=1,
             description="Log only every Nth frame to reduce file size.",
-            constraints={'min': 1, 'max': 100}
-        )
+            constraints={"min": 1, "max": 100},
+        ),
     ]
 
     def __init__(self):
@@ -410,11 +429,11 @@ class FileLogDMXDriver(DMXDriver):
         if self._file_handle:
             self._file_handle.close()
             self._file_handle = None
-        
+
         # Open the new file in append mode
         try:
             filename = self.config.get("filename", "dmx_log.txt")
-            if filename: # Ensure filename is not empty
+            if filename:  # Ensure filename is not empty
                 self._file_handle = open(filename, "a")
                 print(f"File logger now writing to {filename}")
         except IOError as e:
@@ -428,10 +447,14 @@ class FileLogDMXDriver(DMXDriver):
 
         self._frame_count += 1
         if self._frame_count % self.config.get("log_interval", 1) == 0:
-            active_channels = [f"{i+1}:{val}" for i, val in enumerate(rendered) if val > 0]
-            log_line = f"Frame {self._frame_count}: " + ", ".join(active_channels) + "\n"
+            active_channels = [
+                f"{i + 1}:{val}" for i, val in enumerate(rendered) if val > 0
+            ]
+            log_line = (
+                f"Frame {self._frame_count}: " + ", ".join(active_channels) + "\n"
+            )
             self._file_handle.write(log_line)
-            self._file_handle.flush() # Ensure it's written immediately
+            self._file_handle.flush()  # Ensure it's written immediately
 
     def __del__(self):
         """Ensure the file is closed when the driver is destroyed."""

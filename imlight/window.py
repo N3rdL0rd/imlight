@@ -66,6 +66,9 @@ class Window(ABC):
         The template method for drawing a window. Subclasses should not override this.
         It orchestrates the pre_draw, begin, draw_content, end, and post_draw calls.
         """
+        if not self.is_open:
+            return
+
         self.pre_draw()
 
         io = imgui.get_io()
@@ -110,10 +113,6 @@ class ImguiAboutWindow(Window):
 
     def draw(self):
         if self.is_open:
-            io = imgui.get_io()
-            if io.key_ctrl:
-                pass
-
             self.is_open = imgui.show_about_window(closable=True)
 
     def draw_content(self):
@@ -298,11 +297,17 @@ class TexturedWindow(AspectLockedWindow, ABC):
 
         self.pre_draw()
 
+        draw_background_image = True
+        try:
+            if self.app.stage_config.map_mode != self.app.stage_config.MapMode.IMAGE:
+                draw_background_image = False
+        except AttributeError:
+            pass
+
         io = imgui.get_io()
-        flags = imgui.WindowFlags.NO_SCROLLBAR  # No scrollbar for this type of window
+        flags = self.window_flags | imgui.WindowFlags.NO_SCROLLBAR | imgui.WindowFlags.NO_BACKGROUND
         if io.key_ctrl:
             flags |= imgui.WindowFlags.NO_MOVE
-        flags |= imgui.WindowFlags.NO_BACKGROUND
 
         was_open = self.is_open
         opened, self.is_open = imgui.begin(self.title, closable=True, flags=flags)
@@ -311,7 +316,7 @@ class TexturedWindow(AspectLockedWindow, ABC):
             self.on_close()
 
         if opened:
-            if self.texture_id is not None:
+            if draw_background_image and self.texture_id is not None:
                 draw_list = imgui.get_background_draw_list()
                 pos = imgui.get_window_pos()
                 size = imgui.get_window_size()

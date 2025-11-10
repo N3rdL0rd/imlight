@@ -21,7 +21,7 @@ def main():
     glfw.window_hint(glfw.VISIBLE, True)
 
     glfw_window = glfw.create_window(
-        width=1920, height=1080, title="imlight", monitor=None, share=None
+        width=2130, height=1200, title="imlight", monitor=None, share=None
     )
     glfw.make_context_current(glfw_window)
 

@@ -558,7 +558,7 @@ class StageviewWindow(TexturedWindow):
 
     def __init__(self, app: "App"):
         super().__init__(
-            title="Stageview", aspect_ratio=2500 / 2658, image_path="stage.png"
+            title="Stageview", aspect_ratio=2, image_path="stage.png"
         )
         self.app = app
         self.is_open = True
@@ -569,46 +569,77 @@ class StageviewWindow(TexturedWindow):
         self.fixtures_in_marquee_rect = set()
 
     def pre_draw(self):
-        super().pre_draw()
+        # Conditionally apply the aspect ratio lock from the parent class.
+        if self.app.stage_config.map_mode == StageConfig.MapMode.IMAGE:
+            super().pre_draw()
+            
         imgui.set_next_window_pos((1370, 30), imgui.Cond.FIRST_USE_EVER)
         imgui.set_next_window_size((730, 780), imgui.Cond.FIRST_USE_EVER)
 
+    def _draw_parametric_background(self):
+        """Draws a stage, house, and balcony based on the current StageConfig."""
+        draw_list = imgui.get_background_draw_list()
+        pos = imgui.get_window_pos()
+        size = imgui.get_window_size()
+        config = self.app.stage_config
+        
+        # Define colors
+        stage_color = imgui.get_color_u32((0.15, 0.15, 0.15, 1.0))
+        house_color = imgui.get_color_u32((0.1, 0.1, 0.1, 1.0))
+        balcony_color = imgui.get_color_u32((0.08, 0.08, 0.08, 1.0))
+        line_color = imgui.get_color_u32((0.3, 0.3, 0.3, 1.0))
+
+        # Define layout regions
+        stage_top_y = pos[1]
+        stage_bottom_y = pos[1] + size[1] * config.stage_area_height
+
+        balcony_top_y = pos[1] + size[1] * (1.0 - config.balcony_depth)
+        balcony_bottom_y = pos[1] + size[1]
+
+        house_top_y = stage_bottom_y
+        house_bottom_y = balcony_top_y if config.has_balcony else balcony_bottom_y
+
+        # Draw House (middle section)
+        if config.has_house:
+            draw_list.add_rect_filled((pos[0], house_top_y), (pos[0] + size[0], house_bottom_y), house_color)
+
+        # Draw Balcony (bottom section)
+        if config.has_house and config.has_balcony:
+            draw_list.add_rect_filled((pos[0], balcony_top_y), (pos[0] + size[0], balcony_bottom_y), balcony_color)
+
+        # Draw Stage (top section)
+        draw_list.add_rect_filled((pos[0], stage_top_y), (pos[0] + size[0], stage_bottom_y), stage_color)
+
+        # Draw electrics within the stage area
+        num_electrics = config.num_default_electrics
+        if num_electrics > 0:
+            electric_area_height_px = size[1] * config.stage_area_height
+            for i in range(1, num_electrics + 1):
+                y_pos = pos[1] + (i / (num_electrics + 1)) * electric_area_height_px
+                x_start = pos[0] + size[0] * config.electric_padding
+                x_end = pos[0] + size[0] * (1.0 - config.electric_padding)
+                draw_list.add_line((x_start, y_pos), (x_end, y_pos), line_color, thickness=2)
+
     def draw_content(self):
+        """Renders the appropriate background and then the fixtures on top."""
+        if self.app.stage_config.map_mode == StageConfig.MapMode.GRID:
+            self._draw_parametric_background()
+        
         draw_list = imgui.get_window_draw_list()
         window_pos = imgui.get_window_pos()
         window_size = imgui.get_window_size()
         io = imgui.get_io()
-
-        num_electrics = self.app.num_electrics
-        if num_electrics > 0:
-            line_color = imgui.get_color_u32((0.1, 0.1, 0.1, 1.0))
-            top_third_height = window_size[1] / 3.0
-            for i in range(1, num_electrics + 1):
-                y_pos = window_pos[1] + (i / (num_electrics + 1)) * top_third_height
-                draw_list.add_line(
-                    (window_pos[0] + window_size[0] / 20, y_pos),
-                    (window_pos[0] + window_size[0] - window_size[0] / 20, y_pos),
-                    line_color,
-                    thickness=2,
-                )
-
-        if (
-            imgui.is_window_hovered()
-            and io.key_ctrl
-            and io.key_shift
-            and imgui.is_mouse_clicked(imgui.MouseButton.LEFT)
-        ):
+        
+        # --- Marquee Selection Logic ---
+        if (imgui.is_window_hovered() and io.key_ctrl and io.key_shift and 
+            imgui.is_mouse_clicked(imgui.MouseButton.LEFT)):
             self.is_marquee_selecting = True
             self.marquee_start_pos = io.mouse_pos
             self.fixtures_in_marquee_rect.clear()
 
-        if self.is_marquee_selecting and imgui.is_mouse_released(
-            imgui.MouseButton.LEFT
-        ):
+        if self.is_marquee_selecting and imgui.is_mouse_released(imgui.MouseButton.LEFT):
             current_selection_set = set(self.app.selected_fixtures)
-            final_selection_set = current_selection_set.union(
-                self.fixtures_in_marquee_rect
-            )
+            final_selection_set = current_selection_set.union(self.fixtures_in_marquee_rect)
             self.app.selected_fixtures = list(final_selection_set)
             self.is_marquee_selecting = False
             self.fixtures_in_marquee_rect.clear()
@@ -616,35 +647,36 @@ class StageviewWindow(TexturedWindow):
         if self.is_marquee_selecting:
             self.fixtures_in_marquee_rect.clear()
 
+        # --- Dragging Logic ---
         if self.is_dragging_selection:
             drag_delta = imgui.get_mouse_drag_delta(imgui.MouseButton.LEFT)
             for fixture, start_pos in self.dragged_fixtures_start_pos.items():
                 new_x_rel = start_pos[0] + drag_delta[0] / window_size[0]
                 new_y_rel = start_pos[1] + drag_delta[1] / window_size[1]
-                fixture.stagepos = (
-                    max(0.0, min(new_x_rel, 1.0)),
-                    max(0.0, min(new_y_rel, 1.0)),
-                )
+                fixture.stagepos = (max(0.0, min(new_x_rel, 1.0)), max(0.0, min(new_y_rel, 1.0)))
 
-        if (
-            not imgui.is_mouse_down(imgui.MouseButton.LEFT)
-            and self.is_dragging_selection
-        ):
+        # --- Snapping and End-of-Drag Logic ---
+        if not imgui.is_mouse_down(imgui.MouseButton.LEFT) and self.is_dragging_selection:
+            config = self.app.stage_config
+            num_electrics = config.num_default_electrics
             if num_electrics > 0:
-                top_third_relative = 1.0 / 3.0
+                stage_area_relative = config.stage_area_height
                 grid_y_positions = [
-                    (i / (num_electrics + 1)) * top_third_relative
+                    (i / (num_electrics + 1)) * stage_area_relative
                     for i in range(1, num_electrics + 1)
                 ]
                 for fixture in self.dragged_fixtures_start_pos.keys():
                     current_y = fixture.stagepos[1]
-                    closest_y = min(grid_y_positions, key=lambda y: abs(y - current_y))
-                    if abs(current_y - closest_y) <= self.SNAP_THRESHOLD:
-                        fixture.stagepos = (fixture.stagepos[0], closest_y)
+                    # Only snap if the fixture is within the stage area
+                    if current_y <= stage_area_relative:
+                        closest_y = min(grid_y_positions, key=lambda y: abs(y - current_y))
+                        if abs(current_y - closest_y) <= self.SNAP_THRESHOLD:
+                            fixture.stagepos = (fixture.stagepos[0], closest_y)
 
             self.is_dragging_selection = False
             self.dragged_fixtures_start_pos.clear()
 
+        # --- Fixture Drawing and Interaction Logic ---
         fixture_radius = 10
         for universe in self.app.universes:
             for fixture in universe.fixtures:
@@ -652,57 +684,33 @@ class StageviewWindow(TexturedWindow):
                 center_y = window_pos[1] + fixture.stagepos[1] * window_size[1]
 
                 color = self._get_fixture_color(fixture)
-                draw_list.add_circle_filled(
-                    (center_x, center_y), fixture_radius, imgui.get_color_u32(color)
-                )
+                draw_list.add_circle_filled((center_x, center_y), fixture_radius, imgui.get_color_u32(color))
 
-                is_currently_selected = (
-                    fixture in self.app.selected_fixtures
-                    or fixture in self.fixtures_in_marquee_rect
-                )
+                is_currently_selected = (fixture in self.app.selected_fixtures or 
+                                        fixture in self.fixtures_in_marquee_rect)
                 if is_currently_selected:
-                    draw_list.add_circle(
-                        (center_x, center_y),
-                        fixture_radius + 2,
-                        imgui.get_color_u32((1, 1, 0, 1)),
-                        thickness=2,
-                    )
+                    draw_list.add_circle((center_x, center_y), fixture_radius + 2, 
+                                         imgui.get_color_u32((1, 1, 0, 1)), thickness=2)
 
                 text = str(fixture.start_address)
                 text_size = imgui.calc_text_size(text)
                 luminance = 0.299 * color[0] + 0.587 * color[1] + 0.114 * color[2]
-                text_color = (
-                    imgui.get_color_u32((1, 1, 1, 1))
-                    if luminance < 0.5
-                    else imgui.get_color_u32((0, 0, 0, 1))
-                )
-                draw_list.add_text(
-                    (center_x - text_size[0] / 2, center_y - text_size[1] / 2),
-                    text_color,
-                    text,
-                )
+                text_color = (imgui.get_color_u32((1, 1, 1, 1)) if luminance < 0.5 
+                              else imgui.get_color_u32((0, 0, 0, 1)))
+                draw_list.add_text((center_x - text_size[0] / 2, center_y - text_size[1] / 2),
+                                   text_color, text)
 
-                imgui.set_cursor_screen_pos(
-                    (center_x - fixture_radius, center_y - fixture_radius)
-                )
-                imgui.invisible_button(
-                    f"stage_fixture_{fixture.start_address}_{id(fixture)}",
-                    (fixture_radius * 2, fixture_radius * 2),
-                )
+                imgui.set_cursor_screen_pos((center_x - fixture_radius, center_y - fixture_radius))
+                imgui.invisible_button(f"stage_fixture_{fixture.start_address}_{id(fixture)}",
+                                       (fixture_radius * 2, fixture_radius * 2))
 
                 if self.is_marquee_selecting:
-                    marquee_min = (
-                        min(self.marquee_start_pos[0], io.mouse_pos[0]),
-                        min(self.marquee_start_pos[1], io.mouse_pos[1]),
-                    )
-                    marquee_max = (
-                        max(self.marquee_start_pos[0], io.mouse_pos[0]),
-                        max(self.marquee_start_pos[1], io.mouse_pos[1]),
-                    )
-                    if (
-                        marquee_min[0] <= center_x <= marquee_max[0]
-                        and marquee_min[1] <= center_y <= marquee_max[1]
-                    ):
+                    marquee_min = (min(self.marquee_start_pos[0], io.mouse_pos[0]), 
+                                   min(self.marquee_start_pos[1], io.mouse_pos[1]))
+                    marquee_max = (max(self.marquee_start_pos[0], io.mouse_pos[0]), 
+                                   max(self.marquee_start_pos[1], io.mouse_pos[1]))
+                    if (marquee_min[0] <= center_x <= marquee_max[0] and
+                        marquee_min[1] <= center_y <= marquee_max[1]):
                         self.fixtures_in_marquee_rect.add(fixture)
 
                 if imgui.is_item_active() and io.key_ctrl and not io.key_shift:
@@ -711,32 +719,23 @@ class StageviewWindow(TexturedWindow):
                         imgui.reset_mouse_drag_delta(imgui.MouseButton.LEFT)
                         if fixture not in self.app.selected_fixtures:
                             self.app.selected_fixtures = [fixture]
-
                         self.dragged_fixtures_start_pos.clear()
                         for f in self.app.selected_fixtures:
                             self.dragged_fixtures_start_pos[f] = f.stagepos
-
                 elif imgui.is_item_clicked() and not self.is_marquee_selecting:
                     is_selected = fixture in self.app.selected_fixtures
                     if io.key_shift:
-                        if is_selected:
-                            self.app.selected_fixtures.remove(fixture)
-                        else:
-                            self.app.selected_fixtures.append(fixture)
+                        if is_selected: self.app.selected_fixtures.remove(fixture)
+                        else: self.app.selected_fixtures.append(fixture)
                     elif not io.key_ctrl:
                         self.app.selected_fixtures.clear()
-                        if not is_selected:
-                            self.app.selected_fixtures.append(fixture)
+                        if not is_selected: self.app.selected_fixtures.append(fixture)
 
                 if imgui.is_item_hovered():
                     imgui.begin_tooltip()
                     imgui.text(fixture.name)
                     imgui.separator()
-                    intensity_percent = (
-                        (fixture.intensity / 255.0)  # type: ignore
-                        if "intensity" in fixture.profile.channel_map
-                        else 1.0
-                    )
+                    intensity_percent = ((fixture.intensity / 255.0) if "intensity" in fixture.profile.channel_map else 1.0)
                     imgui.text(f"Intensity: {intensity_percent:.0%}")
                     imgui.end_tooltip()
 
@@ -744,9 +743,7 @@ class StageviewWindow(TexturedWindow):
             rect_color = imgui.get_color_u32((0.2, 0.4, 1.0, 0.25))
             border_color = imgui.get_color_u32((0.4, 0.6, 1.0, 0.8))
             draw_list.add_rect_filled(self.marquee_start_pos, io.mouse_pos, rect_color)
-            draw_list.add_rect(
-                self.marquee_start_pos, io.mouse_pos, border_color, thickness=1.0
-            )
+            draw_list.add_rect(self.marquee_start_pos, io.mouse_pos, border_color, thickness=1.0)
 
     def _get_fixture_color(
         self, fixture: ActiveFixture
@@ -1037,13 +1034,6 @@ class CommanderWindow(Window):
                 ],
             ),
             Command(
-                name="electrics",
-                description="Sets the number of stage electrics in this show.",
-                handler=self._command_electrics,
-                aliases=[],
-                arguments=[Argument("num", "The number of electrics", "0-8")],
-            ),
-            Command(
                 name="name",
                 description="Sets the name of the selected fixture, or if multiple are selected, sets their names with sequential appended numbers.",
                 handler=self._command_name,
@@ -1077,15 +1067,6 @@ class CommanderWindow(Window):
             for i, fixture in enumerate(self.app.selected_fixtures):
                 fixture.name = f"{name} {i + 1}"
         return f"Renamed {len(self.app.selected_fixtures)} fixture{'s' if len(self.app.selected_fixtures) > 1 else ''}."
-
-    def _command_electrics(self, *args: str):
-        if not args:
-            return "Error: Missing argument. Usage: select <num>"
-        num = int(args[0])
-        if num > 8 or num < 0:
-            return "Error: Please choose a number of electrics between 0 and 8."
-        self.app.num_electrics = num
-        return f"Set electric count to {num}."
 
     def _command_help(self, *args):
         lines = ["Available Commands:"]
@@ -1454,6 +1435,71 @@ class MasterWindow(Window):
                     active_layer = fixture.layers[self.app.active_layer_name]
                     active_layer.intensity = self.master_level
 
+@dataclass
+class StageConfig:
+    class MapMode(Enum):
+        IMAGE = auto()
+        GRID = auto()
+    
+    num_default_electrics: int = 4
+    map_mode: MapMode = MapMode.GRID
+    has_balcony: bool = False
+    has_house: bool = True
+    electric_padding: float = 0.05
+    stage_area_height: float = 0.4
+    balcony_depth: float = 0.25
+
+
+class StageConfigWindow(Window):
+    """A window for configuring the Stageview's parametric display."""
+    def __init__(self, app: "App"):
+        super().__init__("Stage Configuration")
+        self.app = app
+        self.is_open = False # Hidden by default
+    
+    def pre_draw(self):
+        imgui.set_next_window_size((350, 280), imgui.Cond.FIRST_USE_EVER)
+
+    def draw_content(self):
+        config = self.app.stage_config
+
+        imgui.text("Display Mode")
+        if imgui.radio_button("Parametric", config.map_mode == StageConfig.MapMode.GRID):
+            config.map_mode = StageConfig.MapMode.GRID
+        imgui.same_line()
+        if imgui.radio_button("Image", config.map_mode == StageConfig.MapMode.IMAGE):
+            config.map_mode = StageConfig.MapMode.IMAGE
+        
+        imgui.separator()
+        imgui.text("Layout")
+
+        changed, config.has_house = imgui.checkbox("Draw House", config.has_house)
+
+        if not config.has_house:
+            imgui.begin_disabled()
+        
+        changed, config.has_balcony = imgui.checkbox("Draw Balcony", config.has_balcony)
+        if changed and config.has_balcony:
+            config.has_house = True # Balcony requires a house
+            
+        changed, config.balcony_depth = imgui.slider_float(
+            "Balcony Depth", config.balcony_depth, 0.05, 0.95, "%.2f")
+
+        if not config.has_house:
+            imgui.end_disabled()
+
+        imgui.separator()
+        imgui.text("Stage & Electrics")
+
+        changed, config.num_default_electrics = imgui.slider_int(
+            "Electrics Count", config.num_default_electrics, 0, 12)
+
+        changed, config.stage_area_height = imgui.slider_float(
+            "Stage Area Height", config.stage_area_height, 0.1, 0.9, "%.2f")
+
+        changed, config.electric_padding = imgui.slider_float(
+            "Electric Padding", config.electric_padding, 0.0, 0.4, "%.2f")
+
 
 class App:
     def __init__(self, window: Any, renderer: GlfwRenderer, ctx: moderngl.Context):
@@ -1466,6 +1512,12 @@ class App:
             ShowLayer("scriptedCues", 1.0),
             ShowLayer("cues", 1.0),
         ]
+        self.universes: List[DMXUniverse] = []
+        self.selected_fixtures: List[ActiveFixture] = []
+        self.stage_config = StageConfig()
+        self.channel_type: ChannelType = ChannelType.INTENSITY
+        self.active_layer_name: str = "manual"
+
         self.universes_window = UniversesWindow(self)
         self.patch_window = PatchWindow(self)
         self.gridview_window = GridviewWindow(self)
@@ -1474,24 +1526,21 @@ class App:
         self.fader_window = FaderWindow(self)
         self.layers_window = LayersWindow(self) 
         self.master_window = MasterWindow(self)
-        self.viz_window = VizWindow(self, self.ctx)
+        self.stage_config_window = StageConfigWindow(self)
+        
         self.windows: List[Window] = [
             self.universes_window,
             self.patch_window,
             self.gridview_window,
             self.stageview_window,
+            self.stage_config_window,
             self.commander_window,
             self.fader_window,
             self.layers_window,
             self.master_window,
-            self.viz_window,
             ImguiAboutWindow(),
         ]
-        self.universes: List[DMXUniverse] = []
-        self.selected_fixtures: List[ActiveFixture] = []
-        self.num_electrics: int = 4
-        self.channel_type: ChannelType = ChannelType.INTENSITY
-        self.active_layer_name: str = "manual"
+
 
     def get_show_layer(self, name: str) -> Optional[ShowLayer]:
         """Finds a global ShowLayer by its name."""
@@ -1542,26 +1591,21 @@ class App:
     def draw_main_menu_bar(self):
         """Draws the main menu bar at the top of the screen."""
         if imgui.begin_main_menu_bar():
+            if imgui.begin_menu("File"):
+                if imgui.menu_item("Stage Configuration...")[0]:
+                    self.stage_config_window.is_open = True
+                imgui.end_menu()
+
             if imgui.begin_menu("View"):
                 for window in self.windows:
+                    # Don't show the config window in the main view menu
+                    if isinstance(window, StageConfigWindow):
+                        continue
                     changed, _ = imgui.menu_item(window.title, selected=window.is_open)
                     if changed:
                         window.is_open = not window.is_open
                 imgui.end_menu()
 
-            if imgui.begin_menu("Stageview"):
-                imgui.text("Electrics")
-                imgui.separator()
-                for i in range(1, 9):
-                    changed, _ = imgui.menu_item(f"{i}", selected=(self.num_electrics == i))
-                    if changed:
-                        self.num_electrics = i
-                imgui.separator()
-                changed, _ = imgui.menu_item("None", selected=(self.num_electrics == 0))
-                if changed:
-                    self.num_electrics = 0
-                imgui.end_menu()
-                
             if imgui.begin_menu("Clear"):
                 for show_layer in self.layers:
                     changed, _ = imgui.menu_item(show_layer.name)
@@ -1569,9 +1613,7 @@ class App:
                         for universe in self.universes:
                             for fixture in universe.fixtures:
                                 layer_to_clear = fixture.layers[show_layer.name]
-                                
                                 layer_to_clear.dmx_values.fill(0)
-                                
                                 fixture.compose()
                 imgui.end_menu()
 

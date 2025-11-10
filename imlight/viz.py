@@ -6,14 +6,13 @@ import moderngl
 import numpy as np
 from stl import mesh
 from slimgui import imgui
-from pyrr import Matrix44
+from pyrr import Matrix44, Vector3
 from typing import TYPE_CHECKING
 from .window import Window
 
 if TYPE_CHECKING:
     from .app import App
 
-# --- 1. The Simplest Shaders ---
 # Vertex shader just transforms the vertex position.
 vert = """
     #version 330
@@ -33,6 +32,7 @@ frag = """
     }
 """
 
+
 class VizWindow(Window):
     def __init__(self, app: "App", ctx: moderngl.Context):
         super().__init__("Viz")
@@ -40,16 +40,21 @@ class VizWindow(Window):
         self.ctx = ctx
         self.is_open = True
 
-        # --- 2. Setup a Simple Program and Uniform ---
         self.prog = self.ctx.program(vertex_shader=vert, fragment_shader=frag)
-        self.mvp_uniform = self.prog['Mvp']
+        self.mvp_uniform = self.prog["Mvp"]
 
-        # --- 3. Load the Model ---
-        self.vao = self._load_model_from_stl('teapot.stl')
+        self.vao = self._load_model_from_stl("teapot.stl")
 
-        # Framebuffer for off-screen rendering
         self.fbo = None
         self._fbo_size = (0, 0)
+
+        self.camera_pos = Vector3([150.0, -150.0, 100.0])
+        self.camera_up = Vector3([0.0, 0.0, 1.0])
+        target = Vector3([0.0, 0.0, 50.0])
+        direction = (target - self.camera_pos).normalized
+        self.camera_yaw = np.degrees(np.arctan2(direction.y, direction.x))
+        self.camera_pitch = np.degrees(np.arcsin(direction.z))
+        self.camera_front = direction
 
     def _load_model_from_stl(self, filename: str):
         """
@@ -58,22 +63,13 @@ class VizWindow(Window):
         """
         try:
             mesh_data = mesh.Mesh.from_file(filename)
-
-            # The STL's 'vectors' are triangles. We reshape them into a flat
-            # list of vertices. This is all the data we need.
-            vertices = mesh_data.vectors.reshape(-1, 3).astype('f4')
-
-            # Create a Vertex Buffer Object (VBO) and send the vertex data to it.
+            vertices = mesh_data.vectors.reshape(-1, 3).astype("f4")
             vbo = self.ctx.buffer(vertices.tobytes())
-
-            # Create a Vertex Array Object (VAO) to describe the VBO's layout.
-            # '3f' means each vertex is made of 3 floating-point numbers.
-            # 'in_vert' is the name of the input in our vertex shader.
-            return self.ctx.vertex_array(self.prog, [(vbo, '3f', 'in_vert')])
+            return self.ctx.vertex_array(self.prog, [(vbo, "3f", "in_vert")])
 
         except FileNotFoundError:
             print(f"Error: Model file '{filename}' not found.")
-            return self.ctx.vertex_array(self.prog, []) # Return an empty VAO
+            return self.ctx.vertex_array(self.prog, [])
         except Exception as e:
             print(f"Error loading STL model: {e}")
             return self.ctx.vertex_array(self.prog, [])
@@ -81,10 +77,15 @@ class VizWindow(Window):
     def _resize_fbo(self, width: float, height: float):
         """Recreates the framebuffer object if the rendering size changes."""
         width, height = int(width), int(height)
-        if width <= 0 or height <= 0 or (self.fbo and self._fbo_size == (width, height)):
+        if (
+            width <= 0
+            or height <= 0
+            or (self.fbo and self._fbo_size == (width, height))
+        ):
             return
 
-        if self.fbo: self.fbo.release()
+        if self.fbo:
+            self.fbo.release()
 
         self._fbo_size = (width, height)
         color_attachment = self.ctx.texture(self._fbo_size, 4)
@@ -106,51 +107,78 @@ class VizWindow(Window):
             imgui.text("Could not load 3D model.")
             return
 
-        # --- 4. Render the Scene ---
-        # Activate our off-screen framebuffer
         self.fbo.use()
         self.ctx.clear(0.12, 0.12, 0.12)
         self.ctx.enable(moderngl.DEPTH_TEST)
 
-        # --- Create Fixed Camera Matrices ---
         aspect_ratio = 1.0
         if self._fbo_size[1] > 0:
             aspect_ratio = self._fbo_size[0] / self._fbo_size[1]
 
-        # A fixed projection matrix
+        yaw_rad = np.radians(self.camera_yaw)
+        pitch_rad = np.radians(self.camera_pitch)
+
+        front = Vector3()
+        front.x = np.cos(yaw_rad) * np.cos(pitch_rad)
+        front.y = np.sin(yaw_rad) * np.cos(pitch_rad)
+        front.z = np.sin(pitch_rad)
+        self.camera_front = front.normalized
+
         proj = Matrix44.perspective_projection(45.0, aspect_ratio, 0.1, 1000.0)
-        # A fixed camera looking at the origin from a distance
         lookat = Matrix44.look_at(
-            eye=(150, -150, 150), target=(0, 0, 50), up=(0, 0, 1)
+            eye=self.camera_pos,
+            target=self.camera_pos + self.camera_front,
+            up=self.camera_up,
         )
-        # A simple rotation to make it look 3D
-        model = Matrix44.from_z_rotation(glfw.get_time() * 0.5)
-
-        # Combine them into a single Model-View-Projection matrix
+        model = Matrix44.identity()
         mvp = proj * lookat * model
-        
-        # --- Send data and render ---
-        self.mvp_uniform.write(mvp.astype('f4'))
-        self.vao.render()
 
-        # --- 5. Display in ImGui ---
-        # Restore OpenGL state for ImGui
+        self.mvp_uniform.write(mvp.astype("f4"))
+        self.vao.render()
         self.ctx.disable(moderngl.DEPTH_TEST)
         self.ctx.screen.use()
 
-        # Get the OpenGL texture ID from our framebuffer
         texture_id = self.fbo.color_attachments[0].glo
-        
-        # Draw the texture as an image in the ImGui window
-        imgui.image(
-            texture_id,
-            self._fbo_size,
-            uv0=(0, 1),
-            uv1=(1, 0),
-        )
+
+        imgui.push_id("viz_content_interaction")
+        imgui.invisible_button("##viz_content", self._fbo_size)
+
+        draw_list = imgui.get_window_draw_list()
+        min_pos = imgui.get_item_rect_min()
+        max_pos = imgui.get_item_rect_max()
+        draw_list.add_image(texture_id, min_pos, max_pos, uv_min=(0, 1), uv_max=(1, 0))
+
+        if imgui.is_item_hovered():
+            io = imgui.get_io()
+
+            if io.mouse_wheel != 0:
+                self.camera_pos += self.camera_front * io.mouse_wheel * 5.0
+
+            if imgui.is_mouse_dragging(imgui.MouseButton.LEFT):
+                delta = io.mouse_delta
+                sensitivity = 0.1
+                self.camera_yaw -= delta[0] * sensitivity
+                self.camera_pitch -= delta[1] * sensitivity
+
+                if self.camera_pitch > 89.0:
+                    self.camera_pitch = 89.0
+                if self.camera_pitch < -89.0:
+                    self.camera_pitch = -89.0
+        imgui.pop_id()
+
+        if imgui.is_mouse_dragging(imgui.MouseButton.RIGHT):
+            delta = io.mouse_delta
+            pan_speed = 0.1
+
+            right_vector = Vector3.cross(self.camera_front, self.camera_up).normalized
+
+            self.camera_pos -= right_vector * delta[0] * pan_speed
+            self.camera_pos += self.camera_up * delta[1] * pan_speed
 
     def __del__(self):
         """Clean up ModernGL resources when the window is closed."""
-        if self.fbo: self.fbo.release()
-        if self.vao: self.vao.release()
+        if self.fbo:
+            self.fbo.release()
+        if self.vao:
+            self.vao.release()
         self.prog.release()
