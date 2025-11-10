@@ -41,7 +41,9 @@ class VizWindow(Window):
         self.is_open = True
 
         self.prog = self.ctx.program(vertex_shader=vert, fragment_shader=frag)
-        self.mvp_uniform = self.prog["Mvp"]
+        mvp = self.prog["Mvp"]
+        assert isinstance(mvp, moderngl.Uniform)
+        self.mvp_uniform = mvp
 
         self.vao = self._load_model_from_stl("teapot.stl")
 
@@ -148,9 +150,9 @@ class VizWindow(Window):
         max_pos = imgui.get_item_rect_max()
         draw_list.add_image(texture_id, min_pos, max_pos, uv_min=(0, 1), uv_max=(1, 0))
 
+        io = imgui.get_io()
+        
         if imgui.is_item_hovered():
-            io = imgui.get_io()
-
             if io.mouse_wheel != 0:
                 self.camera_pos += self.camera_front * io.mouse_wheel * 5.0
 
