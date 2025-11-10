@@ -299,13 +299,17 @@ class TexturedWindow(AspectLockedWindow, ABC):
 
         draw_background_image = True
         try:
-            if self.app.stage_config.map_mode != self.app.stage_config.MapMode.IMAGE:
+            if self.app.stage_config.map_mode != self.app.stage_config.MapMode.IMAGE: # type: ignore
                 draw_background_image = False
         except AttributeError:
             pass
 
         io = imgui.get_io()
-        flags = self.window_flags | imgui.WindowFlags.NO_SCROLLBAR | imgui.WindowFlags.NO_BACKGROUND
+        flags = (
+            self.window_flags
+            | imgui.WindowFlags.NO_SCROLLBAR
+            | imgui.WindowFlags.NO_BACKGROUND
+        )
         if io.key_ctrl:
             flags |= imgui.WindowFlags.NO_MOVE
 
