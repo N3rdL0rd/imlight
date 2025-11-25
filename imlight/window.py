@@ -1,7 +1,7 @@
-from typing import Tuple
+from typing import Tuple, cast, Optional
 import numpy as np
 from OpenGL import GL
-from slimgui import imgui
+from imgui_bundle import imgui
 from abc import ABC, abstractmethod
 from PIL import Image
 
@@ -53,33 +53,40 @@ def update_texture_from_numpy(texture_id: int, pixels: np.ndarray) -> None:
 
 class Window(ABC):
     """
-    The updated base class with pre/post draw hooks and a close hook.
+    The updated base class.
+    For HelloImGui, we usually use 'callBeginEnd=False' in DockableWindow options
+    so we can control the window flags and constraints here.
     """
 
     def __init__(self, title: str):
         self.title = title
         self.is_open: bool = True
-        self.window_flags: imgui.WindowFlags = imgui.WindowFlags.NONE
+        self.window_flags: int = imgui.WindowFlags_.none
 
     def draw(self):
         """
-        The template method for drawing a window. Subclasses should not override this.
-        It orchestrates the pre_draw, begin, draw_content, end, and post_draw calls.
+        The template method for drawing a window.
         """
         if not self.is_open:
             return
 
         self.pre_draw()
 
+        # Note: HelloImGui handles docking, but if we manage Begin/End ourselves
+        # (callBeginEnd=False in DockableWindow), we must ensure the name matches.
+        
         io = imgui.get_io()
         flags = self.window_flags
         if io.key_ctrl:
-            flags |= imgui.WindowFlags.NO_MOVE
+            flags |= imgui.WindowFlags_.no_move
 
-        was_open = self.is_open
-        opened, self.is_open = imgui.begin(self.title, closable=True, flags=flags)
+        # imgui_bundle: begin returns (should_draw, p_open_state)
+        opened, isopen = imgui.begin(self.title, self.is_open, flags)
+        if isopen is not None:
+            self.is_open = isopen
+            
 
-        if was_open and not self.is_open:
+        if not self.is_open:
             self.on_close()
 
         if opened:
@@ -113,7 +120,9 @@ class ImguiAboutWindow(Window):
 
     def draw(self):
         if self.is_open:
-            self.is_open = imgui.show_about_window(closable=True)
+            res = imgui.show_about_window(self.is_open)
+            if res is not None:
+                self.is_open = res
 
     def draw_content(self):
         pass
@@ -128,97 +137,87 @@ class CanvasWindow(Window, ABC):
         super().__init__(title)
         self.width = width
         self.height = height
-
         self.pixels = np.zeros((self.height, self.width, 4), dtype=np.uint8)
+        self.texture_id: Optional[int] = None
 
-        self.texture_id = create_texture_from_numpy(self.pixels)
+    def _ensure_texture(self):
+        if self.texture_id is None:
+            self.texture_id = create_texture_from_numpy(self.pixels)
 
     def draw(self):
-        """The main rendering method."""
-        io = imgui.get_io()
-        flags = imgui.WindowFlags.NONE
-        if io.key_ctrl:
-            flags |= imgui.WindowFlags.NO_MOVE
+        self._ensure_texture()
+        super().draw()
 
-        imgui.begin(self.title, flags=flags)
-
+    def draw_content(self):
         self.draw_controls()
         self.update_pixels(self.pixels)
 
-        assert self.texture_id is not None
-        update_texture_from_numpy(self.texture_id, self.pixels)
-        imgui.image(self.texture_id, (self.width, self.height))
+        if self.texture_id is not None:
+            update_texture_from_numpy(self.texture_id, self.pixels)
+            ref = imgui.ImTextureRef(self.texture_id)
+            imgui.image(ref, imgui.ImVec2(self.width, self.height))
 
         self.handle_interaction()
-        imgui.end()
 
     @abstractmethod
     def update_pixels(self, pixels: np.ndarray):
-        """
-        Subclasses MUST implement this method.
-        """
         pass
 
     def draw_controls(self):
-        """
-        Subclasses can optionally override this.
-        """
         pass
 
     def handle_interaction(self):
-        """
-        Subclasses can optionally override this.
-        """
         pass
 
     def __del__(self):
-        """Ensures the OpenGL texture is deleted when the object is destroyed."""
         if self.texture_id is not None:
-            GL.glDeleteTextures([self.texture_id])
+            try:
+                GL.glDeleteTextures([self.texture_id])
+            except:
+                pass
             self.texture_id = None
 
 
 class CanvasFullWindow(Window, ABC):
-    """
-    An abstract base class for an ImGui window that tightly encapsulates a
-    pixel buffer, with no padding or borders around the image.
-    """
-
     def __init__(self, title: str, width: int, height: int, closable: bool = True):
         super().__init__(title)
         self.width = width
         self.height = height
         self.closable = closable
         self.is_open = True
-
         self.pixels = np.zeros((self.height, self.width, 4), dtype=np.uint8)
-        self.texture_id = create_texture_from_numpy(self.pixels)
+        self.texture_id: Optional[int] = None
+
+    def _ensure_texture(self):
+        if self.texture_id is None:
+            self.texture_id = create_texture_from_numpy(self.pixels)
 
     def draw(self):
-        """The main rendering method that ensures a tight fit."""
         if not self.is_open:
             return
+        
+        self._ensure_texture()
 
-        imgui.push_style_var(imgui.StyleVar.WINDOW_PADDING, (0, 0))
-        imgui.push_style_var(imgui.StyleVar.WINDOW_BORDER_SIZE, 0)
-        imgui.set_next_window_content_size((self.width, self.height))
+        imgui.push_style_var(imgui.StyleVar_.window_padding, (0, 0))
+        imgui.push_style_var(imgui.StyleVar_.window_border_size, 0)
+        imgui.set_next_window_content_size(imgui.ImVec2(self.width, self.height))
 
-        flags = imgui.WindowFlags.NO_SCROLLBAR | imgui.WindowFlags.NO_SCROLL_WITH_MOUSE
+        flags = imgui.WindowFlags_.no_scrollbar | imgui.WindowFlags_.no_scroll_with_mouse
 
-        # --- GLOBAL DRAG-DISABLE LOGIC (for this custom draw method) ---
         io = imgui.get_io()
         if io.key_ctrl:
-            flags |= imgui.WindowFlags.NO_MOVE
+            flags |= imgui.WindowFlags_.no_move
 
-        opened, self.is_open = imgui.begin(
-            self.title, closable=self.closable, flags=flags
-        )
+        opened, isopen = imgui.begin(self.title, self.is_open if self.closable else None, flags)
+        if isopen is not None:
+            self.is_open = isopen
 
         if opened:
             self.update_pixels(self.pixels)
-            assert self.texture_id is not None
-            update_texture_from_numpy(self.texture_id, self.pixels)
-            imgui.image(self.texture_id, (self.width, self.height))
+            if self.texture_id is not None:
+                update_texture_from_numpy(self.texture_id, self.pixels)
+                ref = imgui.ImTextureRef(self.texture_id)
+                imgui.image(ref, imgui.ImVec2(self.width, self.height))
             self.handle_interaction()
 
         imgui.end()
@@ -226,80 +225,71 @@ class CanvasFullWindow(Window, ABC):
 
     @abstractmethod
     def update_pixels(self, pixels: np.ndarray):
-        """Subclasses MUST implement this to define the canvas content."""
         pass
 
     def handle_interaction(self):
-        """Optional hook for subclasses to handle mouse interaction."""
         pass
 
     def __del__(self):
-        """Ensures the OpenGL texture is deleted."""
         if self.texture_id is not None:
-            GL.glDeleteTextures([self.texture_id])
+            try:
+                GL.glDeleteTextures([self.texture_id])
+            except:
+                pass
             self.texture_id = None
 
 
 class AspectLockedWindow(Window, ABC):
-    """A window that maintains a constant aspect ratio when resized."""
-
     def __init__(self, title: str, aspect_ratio: float):
         super().__init__(title)
         if aspect_ratio <= 0:
             raise ValueError("Aspect ratio must be positive.")
         self.aspect_ratio = aspect_ratio
 
-    def get_aspect_ratio_func(self):
-        aspect_ratio = self.aspect_ratio
-
-        def cb(
-            _pos: Tuple[float, float],
-            _current_size: Tuple[float, float],
-            desired_size: Tuple[float, float],
-            _int_user_data: int,
-        ) -> Tuple[float, float]:
-            nonlocal aspect_ratio
-            new_desired_y = int(desired_size[0] / aspect_ratio)
-            return (desired_size[0], new_desired_y)
-
-        return cb
-
     def pre_draw(self):
-        """Set the resize constraints before the window is drawn."""
         super().pre_draw()
+        # Callback for size constraints
+        def aspect_cb(data: imgui.SizeCallbackData):
+            data.desired_size = imgui.ImVec2(data.desired_size.x, data.desired_size.x / self.aspect_ratio)
+
         imgui.set_next_window_size_constraints(
-            size_min=(100, 100 / self.aspect_ratio),
-            size_max=(5000, 2000 / self.aspect_ratio),
-            cb=self.get_aspect_ratio_func(),
+            imgui.ImVec2(100, 100 / self.aspect_ratio),
+            imgui.ImVec2(5000, 2000 / self.aspect_ratio),
+            aspect_cb,
         )
 
 
 class TexturedWindow(AspectLockedWindow, ABC):
-    """An aspect-locked window with an image drawn over its entire background."""
-
     def __init__(self, title: str, aspect_ratio: float, image_path: str):
         super().__init__(title, aspect_ratio)
-        self.texture_id = None
-        try:
-            with Image.open(image_path) as img:
-                img = img.convert("RGBA")
-                pixels = np.array(img, dtype=np.uint8)
-                self.texture_id = create_texture_from_numpy(pixels)
-        except FileNotFoundError:
-            print(f"Error: Background image not found at '{image_path}'")
-        except Exception as e:
-            print(f"Error loading image: {e}")
+        self.image_path = image_path
+        self.texture_id: Optional[int] = None
+        self.pixels: Optional[np.ndarray] = None
+        self.app = None # Will be set by App class
+
+    def _ensure_texture(self):
+        if self.texture_id is None:
+            try:
+                with Image.open(self.image_path) as img:
+                    img = img.convert("RGBA")
+                    self.pixels = np.array(img, dtype=np.uint8)
+                    self.texture_id = create_texture_from_numpy(self.pixels)
+            except FileNotFoundError:
+                print(f"Error: Background image not found at '{self.image_path}'")
+            except Exception as e:
+                print(f"Error loading image: {e}")
 
     def draw(self):
-        """Custom draw method to render the background image."""
         if not self.is_open:
             return
-
+        
+        self._ensure_texture()
         self.pre_draw()
 
         draw_background_image = True
         try:
-            if self.app.stage_config.map_mode != self.app.stage_config.MapMode.IMAGE: # type: ignore
+            # Check app state if available
+            if self.app and self.app.stage_config.map_mode != self.app.stage_config.MapMode.IMAGE: # type: ignore
                 draw_background_image = False
         except AttributeError:
             pass
@@ -307,25 +297,24 @@ class TexturedWindow(AspectLockedWindow, ABC):
         io = imgui.get_io()
         flags = (
             self.window_flags
-            | imgui.WindowFlags.NO_SCROLLBAR
-            | imgui.WindowFlags.NO_BACKGROUND
+            | imgui.WindowFlags_.no_scrollbar
+            | imgui.WindowFlags_.no_background
         )
         if io.key_ctrl:
-            flags |= imgui.WindowFlags.NO_MOVE
+            flags |= imgui.WindowFlags_.no_move
 
-        was_open = self.is_open
-        opened, self.is_open = imgui.begin(self.title, closable=True, flags=flags)
-
-        if was_open and not self.is_open:
-            self.on_close()
+        opened, isopen = imgui.begin(self.title, self.is_open, flags)
+        if isopen is not None:
+            self.is_open = isopen
 
         if opened:
             if draw_background_image and self.texture_id is not None:
                 draw_list = imgui.get_background_draw_list()
                 pos = imgui.get_window_pos()
                 size = imgui.get_window_size()
+                ref = imgui.ImTextureRef(self.texture_id)
                 draw_list.add_image(
-                    self.texture_id, pos, (pos[0] + size[0], pos[1] + size[1])
+                    ref, pos, imgui.ImVec2(pos.x + size.x, pos.y + size.y)
                 )
 
             self.draw_content()
@@ -334,7 +323,9 @@ class TexturedWindow(AspectLockedWindow, ABC):
         self.post_draw()
 
     def __del__(self):
-        """Clean up the OpenGL texture."""
         if self.texture_id is not None:
-            GL.glDeleteTextures([self.texture_id])
+            try:
+                GL.glDeleteTextures([self.texture_id])
+            except:
+                pass
             self.texture_id = None

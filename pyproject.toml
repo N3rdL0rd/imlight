@@ -15,7 +15,7 @@ dependencies = [
     "pyopengl>=3.1.10",
     "pyrr>=0.10.3",
     "requests>=2.32.5",
-    "slimgui>=0.5.2",
+    "imgui-bundle>=0.10.0",
 ]
 
 [tool.uv]
@@ -27,6 +27,7 @@ ola = { git = "https://github.com/N3rdL0rd/ola-py" }
 [dependency-groups]
 dev = [
     "mypy>=1.18.2",
+    "pyright>=1.1.407",
     "ruff>=0.14.3",
 ]
 

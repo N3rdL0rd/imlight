@@ -1,13 +1,10 @@
-# viz.py
-
 from __future__ import annotations
-import glfw
 import moderngl
 import numpy as np
 from stl import mesh
-from slimgui import imgui
+from imgui_bundle import imgui
 from pyrr import Matrix44, Vector3
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional, cast
 from .window import Window
 
 if TYPE_CHECKING:
@@ -34,21 +31,16 @@ frag = """
 
 
 class VizWindow(Window):
-    def __init__(self, app: "App", ctx: moderngl.Context):
+    def __init__(self, app: "App"):
         super().__init__("Viz")
         self.app = app
-        self.ctx = ctx
         self.is_open = True
-
-        self.prog = self.ctx.program(vertex_shader=vert, fragment_shader=frag)
-        mvp = self.prog["Mvp"]
-        assert isinstance(mvp, moderngl.Uniform)
-        self.mvp_uniform = mvp
-
-        self.vao = self._load_model_from_stl("teapot.stl")
-
+        self.ctx: Optional[moderngl.Context] = None
+        self.prog = None
+        self.vao = None
         self.fbo = None
         self._fbo_size = (0, 0)
+        self.mvp_uniform = None
 
         self.camera_pos = Vector3([150.0, -150.0, 100.0])
         self.camera_up = Vector3([0.0, 0.0, 1.0])
@@ -58,11 +50,15 @@ class VizWindow(Window):
         self.camera_pitch = np.degrees(np.arcsin(direction.z))
         self.camera_front = direction
 
+    def init_gl(self, ctx: moderngl.Context):
+        """Initialize ModernGL resources. Called after context is ready."""
+        self.ctx = ctx
+        self.prog = self.ctx.program(vertex_shader=vert, fragment_shader=frag)
+        self.mvp_uniform = cast(moderngl.Uniform, self.prog["Mvp"])
+        self.vao = self._load_model_from_stl("teapot.stl")
+
     def _load_model_from_stl(self, filename: str):
-        """
-        The simplest way to load an STL.
-        Just grabs the vertices and sends them to the GPU.
-        """
+        if self.ctx is None: return None
         try:
             mesh_data = mesh.Mesh.from_file(filename)
             vertices = mesh_data.vectors.reshape(-1, 3).astype("f4")
@@ -74,10 +70,14 @@ class VizWindow(Window):
             return self.ctx.vertex_array(self.prog, [])
         except Exception as e:
             print(f"Error loading STL model: {e}")
-            return self.ctx.vertex_array(self.prog, [])
+            if self.prog:
+                return self.ctx.vertex_array(self.prog, [])
+            return None
 
     def _resize_fbo(self, width: float, height: float):
         """Recreates the framebuffer object if the rendering size changes."""
+        if self.ctx is None: return
+
         width, height = int(width), int(height)
         if (
             width <= 0
@@ -97,16 +97,21 @@ class VizWindow(Window):
         )
 
     def pre_draw(self):
-        imgui.set_next_window_pos((580, 30), imgui.Cond.FIRST_USE_EVER)
-        imgui.set_next_window_size((780, 480), imgui.Cond.FIRST_USE_EVER)
+        # Usually docking layout handles position/size, but this sets defaults for free-floating
+        imgui.set_next_window_pos(imgui.ImVec2(580, 30), imgui.Cond_.first_use_ever)
+        imgui.set_next_window_size(imgui.ImVec2(780, 480), imgui.Cond_.first_use_ever)
 
     def draw_content(self):
         """Renders the 3D scene to a texture, then draws that texture in the window."""
-        content_size = imgui.get_content_region_avail()
-        self._resize_fbo(content_size[0], content_size[1])
+        if self.ctx is None:
+            imgui.text("Initializing GL...")
+            return
 
-        if not self.fbo or not self.vao or self.vao.vertices == 0:
-            imgui.text("Could not load 3D model.")
+        content_size = imgui.get_content_region_avail()
+        self._resize_fbo(content_size.x, content_size.y)
+
+        if not self.fbo or not self.vao:
+            imgui.text("Could not load 3D model or FBO.")
             return
 
         self.fbo.use()
@@ -135,20 +140,25 @@ class VizWindow(Window):
         model = Matrix44.identity()
         mvp = proj * lookat * model
 
-        self.mvp_uniform.write(mvp.astype("f4"))
+        if self.mvp_uniform:
+            self.mvp_uniform.write(mvp.astype("f4"))
         self.vao.render()
         self.ctx.disable(moderngl.DEPTH_TEST)
-        self.ctx.screen.use()
+        self.ctx.screen.use() # Switch back to default screen
 
         texture_id = self.fbo.color_attachments[0].glo
 
+        # Interaction area
         imgui.push_id("viz_content_interaction")
-        imgui.invisible_button("##viz_content", self._fbo_size)
+        imgui.invisible_button("##viz_content", imgui.ImVec2(self._fbo_size[0], self._fbo_size[1]))
 
+        # Draw the texture
         draw_list = imgui.get_window_draw_list()
         min_pos = imgui.get_item_rect_min()
         max_pos = imgui.get_item_rect_max()
-        draw_list.add_image(texture_id, min_pos, max_pos, uv_min=(0, 1), uv_max=(1, 0))
+        
+        ref = imgui.ImTextureRef(texture_id)
+        draw_list.add_image(ref, min_pos, max_pos, (0, 1), (1, 0))
 
         io = imgui.get_io()
         
@@ -156,11 +166,11 @@ class VizWindow(Window):
             if io.mouse_wheel != 0:
                 self.camera_pos += self.camera_front * io.mouse_wheel * 5.0
 
-            if imgui.is_mouse_dragging(imgui.MouseButton.LEFT):
+            if imgui.is_mouse_dragging(imgui.MouseButton_.left):
                 delta = io.mouse_delta
                 sensitivity = 0.1
-                self.camera_yaw -= delta[0] * sensitivity
-                self.camera_pitch -= delta[1] * sensitivity
+                self.camera_yaw -= delta.x * sensitivity
+                self.camera_pitch -= delta.y * sensitivity
 
                 if self.camera_pitch > 89.0:
                     self.camera_pitch = 89.0
@@ -168,19 +178,20 @@ class VizWindow(Window):
                     self.camera_pitch = -89.0
         imgui.pop_id()
 
-        if imgui.is_mouse_dragging(imgui.MouseButton.RIGHT):
+        if imgui.is_mouse_dragging(imgui.MouseButton_.right):
             delta = io.mouse_delta
             pan_speed = 0.1
 
             right_vector = Vector3.cross(self.camera_front, self.camera_up).normalized
 
-            self.camera_pos -= right_vector * delta[0] * pan_speed
-            self.camera_pos += self.camera_up * delta[1] * pan_speed
+            self.camera_pos -= right_vector * delta.x * pan_speed
+            self.camera_pos += self.camera_up * delta.y * pan_speed
 
     def __del__(self):
-        """Clean up ModernGL resources when the window is closed."""
+        """Clean up ModernGL resources."""
         if self.fbo:
             self.fbo.release()
         if self.vao:
             self.vao.release()
-        self.prog.release()
+        if self.prog:
+            self.prog.release()
